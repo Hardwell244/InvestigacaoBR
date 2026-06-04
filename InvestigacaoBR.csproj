@@ -76,6 +76,7 @@
     <Compile Include="InvestigacaoBR\Core\Aleatorio.cs" />
     <Compile Include="InvestigacaoBR\Core\EntryPoint.cs" />
     <Compile Include="InvestigacaoBR\Core\Logger.cs" />
+    <Compile Include="InvestigacaoBR\Core\Notificacao.cs" />
     <Compile Include="InvestigacaoBR\Core\TempoJogo.cs" />
     <Compile Include="InvestigacaoBR\Data\Caso.cs" />
     <Compile Include="InvestigacaoBR\Data\EstadoEvidencia.cs" />
@@ -98,6 +99,7 @@
     <Compile Include="InvestigacaoBR\Services\PersonaService.cs" />
     <Compile Include="InvestigacaoBR\Services\PoolsCaso.cs" />
     <Compile Include="InvestigacaoBR\UI\MenuDetetive.cs" />
+    <Compile Include="InvestigacaoBR\UI\MenuInterrogatorio.cs" />
     <Compile Include="InvestigacaoBR\UI\MenuSelecaoCasos.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>

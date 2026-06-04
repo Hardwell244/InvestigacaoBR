@@ -4,11 +4,6 @@ using InvestigacaoBR.Data;
 
 namespace InvestigacaoBR.Services
 {
-    /// <summary>
-    /// Gera um caso de homicidio aleatorio: local sorteado, vitima morta no centro, arma
-    /// sorteada (fogo -> capsulas + item com DNA / branca -> faca com DNA), sangue da vitima,
-    /// culpado plantado com DNA, inocentes/testemunhas e 0-2 cameras. A verdade congela aqui.
-    /// </summary>
     public class GeradorHomicidio : GeradorBase
     {
         public override Caso Gerar(DateTime agoraInGame)
@@ -20,17 +15,15 @@ namespace InvestigacaoBR.Services
 
             if (local != null)
             {
-                caso.CenaX = local.X;
-                caso.CenaY = local.Y;
-                caso.CenaZ = local.Z;
-                caso.CenaHeading = local.Heading;
+                caso.CenaX = local.X; caso.CenaY = local.Y;
+                caso.CenaZ = local.Z; caso.CenaHeading = local.Heading;
             }
 
             string dnaCulpado = Aleatorio.NovoDnaId();
             string dnaVitima = Aleatorio.NovoDnaId();
 
-            // ----- Vitima (morta, no centro da cena) -----
-            PedDoCaso vitima = CriarPed(PoolsCaso.ModelosVitima, "Vitima do homicidio.", RolePed.Indefinido, 0f, 0.5f);
+            // ----- Vitima (morta, centro da cena) -----
+            PedDoCaso vitima = CriarPed(PoolsCaso.ModelosVitima, "Vitima do homicidio.", RolePed.Indefinido, 0f, 0.3f);
             vitima.SpawnarMorto = true;
             vitima.Heading = caso.CenaHeading;
             vitima.OffsetX = 0f;
@@ -39,8 +32,9 @@ namespace InvestigacaoBR.Services
             vitima.PerfilDnaId = dnaVitima;
             caso.AdicionarPed(vitima);
 
-            // ----- Culpado (presente, nao classificado, DNA plantado) -----
-            PedDoCaso culpado = CriarPed(PoolsCaso.ModelosSuspeito, "Pessoa avistada na area no horario do crime.", RolePed.Indefinido, 4f, 9f);
+            // ----- Culpado (8-14 m — longe da vitima para nao parecer obvio) -----
+            PedDoCaso culpado = CriarPed(PoolsCaso.ModelosSuspeito,
+                "Pessoa avistada na area no horario do crime.", RolePed.Indefinido, 8f, 14f);
             culpado.EhCulpadoReal = true;
             culpado.PerfilDnaId = dnaCulpado;
             culpado.RegistroTelefonico = "Chamadas para numero pre-pago minutos antes e depois do horario do crime.";
@@ -52,12 +46,13 @@ namespace InvestigacaoBR.Services
             }
             caso.AdicionarPed(culpado);
 
-            // ----- Inocentes / testemunhas (2 a 3, modelos distintos) -----
+            // ----- Civis / testemunhas (3-6 m — perto da cena, longe do culpado) -----
             int qtdCivis = Aleatorio.Inteiro(2, 3);
             foreach (string modelo in Aleatorio.Itens(PoolsCaso.ModelosCivil, qtdCivis))
             {
-                PedDoCaso civil = CriarPed(PoolsCaso.ModelosCivil, "Pessoa nas redondezas no momento do fato.", RolePed.Indefinido, 5f, 12f);
-                civil.ModeloPed = modelo; // garante distintos
+                PedDoCaso civil = CriarPed(PoolsCaso.ModelosCivil,
+                    "Pessoa nas redondezas no momento do fato.", RolePed.Indefinido, 3f, 6f);
+                civil.ModeloPed = modelo;
                 caso.AdicionarPed(civil);
             }
 
@@ -66,7 +61,6 @@ namespace InvestigacaoBR.Services
             if (armaDeFogo)
             {
                 caso.DescricaoGeral += " Indicios de disparo de arma de fogo.";
-
                 int qtdCapsulas = Aleatorio.Inteiro(1, 3);
                 for (int i = 0; i < qtdCapsulas; i++)
                 {
@@ -78,8 +72,6 @@ namespace InvestigacaoBR.Services
                     AplicarOffsetEvidencia(capsula, 0.5f, 3f);
                     caso.AdicionarEvidencia(capsula);
                 }
-
-                // O DNA do culpado vem de um item pessoal deixado no local
                 Evidencia item = new Evidencia("Item pessoal", "Objeto deixado pelo autor no local.")
                 {
                     ModeloProp = Aleatorio.Item(PoolsCaso.PropsItemPessoal),
@@ -92,7 +84,6 @@ namespace InvestigacaoBR.Services
             else
             {
                 caso.DescricaoGeral += " Ferimentos compativeis com arma branca.";
-
                 Evidencia faca = new Evidencia("Arma branca", "Faca ensanguentada abandonada na cena.")
                 {
                     ModeloProp = Aleatorio.Item(PoolsCaso.PropsArmaBranca),
@@ -103,13 +94,13 @@ namespace InvestigacaoBR.Services
                 caso.AdicionarEvidencia(faca);
             }
 
-            // ----- Sangue (DNA da vitima, sem prop visual) -----
+            // ----- Sangue (marcador forense — sem prop, decal spawnado pelo CenaService) -----
             Evidencia sangue = new Evidencia("Mancha de sangue", "Poca de sangue ao redor do corpo.")
             {
                 PerfilDnaId = dnaVitima,
-                ResultadoForense = "Sangue compativel com a vitima."
+                ResultadoForense = "Sangue compativel com a vitima. DNA confirmado."
             };
-            AplicarOffsetEvidencia(sangue, 0.3f, 1.5f);
+            AplicarOffsetEvidencia(sangue, 0.2f, 1f);
             caso.AdicionarEvidencia(sangue);
 
             // ----- Cameras (0 a 2) -----
@@ -122,15 +113,16 @@ namespace InvestigacaoBR.Services
             int qtdCam = Aleatorio.Inteiro(0, 2);
             for (int i = 0; i < qtdCam; i++)
             {
-                GravacaoCamera cam = CriarCamera(
-                    $"Camera de seguranca #{i + 1}",
-                    Aleatorio.Item(infosCam),
+                caso.AdicionarCamera(CriarCamera(
+                    $"Camera de seguranca #{i + 1}", Aleatorio.Item(infosCam),
                     caso.CenaX, caso.CenaY, caso.CenaZ,
-                    Aleatorio.Real(-12f, 12f), Aleatorio.Real(-12f, 12f), 4f);
-                caso.AdicionarCamera(cam);
+                    Aleatorio.Real(-12f, 12f), Aleatorio.Real(-12f, 12f), 4f));
             }
 
-            Logger.Info($"GeradorHomicidio: '{caso.Titulo}' gerado (arma {(armaDeFogo ? "de fogo" : "branca")}, {caso.Peds.Count} peds, {caso.Evidencias.Count} evidencias, {caso.Cameras.Count} cameras).");
+            // fix #5: espalha angulos para evitar aglomeracao
+            DistribuirAngulos(caso.Peds);
+
+            Logger.Info($"GeradorHomicidio: '{caso.Titulo}' ({(armaDeFogo ? "fogo" : "branca")}, {caso.Peds.Count} peds, {caso.Evidencias.Count} ev, {caso.Cameras.Count} cam).");
             return caso;
         }
     }

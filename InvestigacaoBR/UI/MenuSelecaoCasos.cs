@@ -1,18 +1,12 @@
 ﻿using System.Collections.Generic;
 using LemonUI;
 using LemonUI.Menus;
-using Rage;
 using InvestigacaoBR.Core;
 using InvestigacaoBR.Data;
 using InvestigacaoBR.Services;
 
 namespace InvestigacaoBR.UI
 {
-    /// <summary>
-    /// Menu de selecao de casos (o "pegar casos" da delegacia). Lista os casos Disponivel; ao
-    /// escolher um, aceita (Disponivel -> Aberto), spawna a cena fisica e repoe o pool. Recebe o
-    /// ObjectPool da LemonUI (criado e processado pelo EntryPoint).
-    /// </summary>
     public class MenuSelecaoCasos
     {
         private readonly NativeMenu _menu;
@@ -30,56 +24,48 @@ namespace InvestigacaoBR.UI
             pool.Add(_menu);
         }
 
-        /// <summary>Reconstroi a lista de casos disponiveis e abre o menu.</summary>
         public void Abrir()
         {
-            Recarregar();
+            RebuildLista();
             _menu.Visible = true;
             Logger.Menu("SelecaoCasos", "aberto");
         }
 
-        private void Recarregar()
+        /// <summary>fix #7: fecha o menu (toggle pelo EntryPoint).</summary>
+        public void Fechar()
+        {
+            _menu.Visible = false;
+        }
+
+        private void RebuildLista()
         {
             _menu.Clear();
 
-            List<Caso> disponiveis = new List<Caso>(_casoService.ObterDisponiveis());
-            if (disponiveis.Count == 0)
+            List<Caso> casos = new List<Caso>(_casoService.ObterDisponiveis());
+            if (casos.Count == 0)
             {
-                NativeItem vazio = new NativeItem("Nenhum caso disponivel", "Volte mais tarde para novos casos.")
-                {
-                    Enabled = false
-                };
-                _menu.Add(vazio);
+                _menu.Add(new NativeItem("Nenhum caso disponivel", "Aguarde novos casos.") { Enabled = false });
                 return;
             }
 
-            foreach (Caso caso in disponiveis)
+            foreach (Caso caso in casos)
             {
-                string descricao = $"{caso.DescricaoGeral}~n~Peds: {caso.Peds.Count} | Evidencias: {caso.Evidencias.Count} | Cameras: {caso.Cameras.Count}";
-                NativeItem item = new NativeItem(caso.Titulo, descricao);
-
-                Caso capturado = caso; // captura para o closure do evento
-                item.Activated += (sender, args) => AceitarCaso(capturado);
-
+                Caso c = caso;
+                string desc = $"Local: ({c.CenaX:F0}, {c.CenaY:F0}) | Peds: {c.Peds.Count} | Evidencias: {c.Evidencias.Count}";
+                NativeItem item = new NativeItem(c.Titulo, desc);
+                item.Activated += (s, e) =>
+                {
+                    if (_casoService.AceitarCaso(c.Id))
+                    {
+                        _cenaService.SpawnarCena(c);
+                        _geradorCasos.GarantirPool();
+                        Notificacao.Sucesso($"Caso aceito: {c.Titulo}. Siga o blip.");
+                        Logger.Menu("SelecaoCasos", $"aceitar '{c.Titulo}'");
+                    }
+                    _menu.Visible = false;
+                };
                 _menu.Add(item);
             }
-        }
-
-        private void AceitarCaso(Caso caso)
-        {
-            Logger.Menu("SelecaoCasos", $"aceitar '{caso.Titulo}'");
-
-            if (!_casoService.AceitarCaso(caso.Id))
-            {
-                Game.DisplayNotification("~r~Nao foi possivel aceitar o caso.");
-                return;
-            }
-
-            _cenaService.SpawnarCena(caso);   // blip + peds + evidencias no mundo
-            _geradorCasos.GarantirPool();     // repoe o pool
-
-            Game.DisplayNotification($"~g~CASO ACEITO~s~~n~{caso.Titulo}. Siga o blip ate a cena.");
-            _menu.Visible = false;
         }
     }
 }

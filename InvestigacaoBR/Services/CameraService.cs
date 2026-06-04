@@ -1,5 +1,5 @@
 ﻿using System;
-using System.Windows.Forms; // Keys
+using System.Windows.Forms;
 using Rage;
 using Rage.Native;
 using InvestigacaoBR.Core;
@@ -7,29 +7,16 @@ using InvestigacaoBR.Data;
 
 namespace InvestigacaoBR.Services
 {
-    /// <summary>
-    /// Renderiza as cameras de seguranca via funcoes NATIVAS (estaveis entre versoes do RPH):
-    /// cria a cam, aponta para a cena, aplica filtro CCTV e renderiza ate o jogador sair. Ao final
-    /// restaura a camera do jogo, marca a gravacao como revisada (libera a info) e salva.
-    /// </summary>
     public class CameraService
     {
-        private const Keys TeclaSair = Keys.Back; // Backspace sai da camera
-
+        private const Keys TeclaSair = Keys.Back;
         private readonly CasoService _casoService;
 
-        public CameraService(CasoService casoService)
-        {
-            _casoService = casoService;
-        }
+        public CameraService(CasoService casoService) { _casoService = casoService; }
 
         public void Visualizar(GravacaoCamera gravacao)
         {
-            if (gravacao == null)
-            {
-                Logger.Warn("CameraService.Visualizar: gravacao nula.");
-                return;
-            }
+            if (gravacao == null) { Logger.Warn("CameraService.Visualizar: gravacao nula."); return; }
 
             GameFiber.StartNew(() =>
             {
@@ -49,38 +36,29 @@ namespace InvestigacaoBR.Services
                     NativeFunction.Natives.RENDER_SCRIPT_CAMS(true, false, 0, true, false);
 
                     AplicarFiltroCctv(true);
-                    Game.DisplayHelp($"Camera: {gravacao.Local}. Pressione BACKSPACE para sair.");
+                    Game.DisplayHelp($"Camera: {gravacao.Local}. BACKSPACE para sair.");
 
                     while (true)
                     {
-                        if (Game.IsKeyDown(TeclaSair))
-                        {
-                            break;
-                        }
+                        if (Game.IsKeyDown(TeclaSair)) break;
                         GameFiber.Yield();
                     }
                 }
-                catch (Exception ex)
-                {
-                    Logger.Exception(ex, $"CameraService.Visualizar '{gravacao.Local}'");
-                }
+                catch (Exception ex) { Logger.Exception(ex, $"CameraService.Visualizar '{gravacao.Local}'"); }
                 finally
                 {
                     try { NativeFunction.Natives.RENDER_SCRIPT_CAMS(false, false, 0, true, false); } catch { }
                     AplicarFiltroCctv(false);
-
                     if (criada)
                     {
                         try { NativeFunction.Natives.SET_CAM_ACTIVE(cam, false); } catch { }
                         try { NativeFunction.Natives.DESTROY_CAM(cam, false); } catch { }
                     }
-
                     if (gravacao.MarcarRevisada())
                     {
                         _casoService.Salvar();
-                        Game.DisplayNotification($"~g~CAMERA~s~~n~{gravacao.Local}: {gravacao.InfoRevelada}");
+                        Notificacao.Camera($"{gravacao.Local}: {gravacao.InfoRevelada}");
                     }
-
                     Logger.Info($"Camera '{gravacao.Local}' encerrada.");
                 }
             }, "InvestigacaoBR.Camera");
@@ -90,19 +68,10 @@ namespace InvestigacaoBR.Services
         {
             try
             {
-                if (ativar)
-                {
-                    NativeFunction.Natives.SET_TIMECYCLE_MODIFIER("scanline_cam");
-                }
-                else
-                {
-                    NativeFunction.Natives.CLEAR_TIMECYCLE_MODIFIER();
-                }
+                if (ativar) NativeFunction.Natives.SET_TIMECYCLE_MODIFIER("scanline_cam");
+                else NativeFunction.Natives.CLEAR_TIMECYCLE_MODIFIER();
             }
-            catch (Exception ex)
-            {
-                Logger.Exception(ex, "AplicarFiltroCctv");
-            }
+            catch (Exception ex) { Logger.Exception(ex, "AplicarFiltroCctv"); }
         }
     }
 }

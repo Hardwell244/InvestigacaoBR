@@ -5,12 +5,6 @@ using InvestigacaoBR.Data;
 
 namespace InvestigacaoBR.Services
 {
-    /// <summary>
-    /// Gera um caso de roubo de carga aleatorio: cena de docas/deposito, quadrilha com 2-3
-    /// membros (todos culpados reais, cada um com DNA proprio), testemunha opcional, evidencias
-    /// (carga, ferramenta de arrombamento, celular) com DNA de membros distintos para cruzar, e
-    /// cameras da acao. Verdade congela aqui.
-    /// </summary>
     public class GeradorRouboCarga : GeradorBase
     {
         public override Caso Gerar(DateTime agoraInGame)
@@ -22,22 +16,21 @@ namespace InvestigacaoBR.Services
 
             if (local != null)
             {
-                caso.CenaX = local.X;
-                caso.CenaY = local.Y;
-                caso.CenaZ = local.Z;
-                caso.CenaHeading = local.Heading;
+                caso.CenaX = local.X; caso.CenaY = local.Y;
+                caso.CenaZ = local.Z; caso.CenaHeading = local.Heading;
             }
 
-            // ----- Quadrilha: 2 a 3 membros, cada um culpado com DNA proprio -----
+            // ----- Quadrilha (2-3 membros, 2-8 m — espalhados pela cena do roubo) -----
             int qtdMembros = Aleatorio.Inteiro(2, 3);
-            List<string> dnasQuadrilha = new List<string>();
+            List<string> dnas = new List<string>();
 
             for (int i = 0; i < qtdMembros; i++)
             {
                 string dna = Aleatorio.NovoDnaId();
-                dnasQuadrilha.Add(dna);
+                dnas.Add(dna);
 
-                PedDoCaso membro = CriarPed(PoolsCaso.ModelosSuspeito, $"Suspeito de integrar a quadrilha (membro {i + 1}).", RolePed.Indefinido, 2f, 8f);
+                PedDoCaso membro = CriarPed(PoolsCaso.ModelosSuspeito,
+                    $"Suspeito de integrar a quadrilha (membro {i + 1}).", RolePed.Indefinido, 2f, 8f);
                 membro.EhCulpadoReal = true;
                 membro.PerfilDnaId = dna;
                 membro.RegistroTelefonico = "Mensagens coordenando horario e ponto de interceptacao da carga com os demais.";
@@ -50,27 +43,28 @@ namespace InvestigacaoBR.Services
                 caso.AdicionarPed(membro);
             }
 
-            // ----- Testemunha opcional (trabalhador local) -----
+            // ----- Testemunha (10-16 m — trabalhador que viu de longe, longe da quadrilha) -----
             if (Aleatorio.Chance(60))
             {
-                PedDoCaso testemunha = CriarPed(PoolsCaso.ModelosCivil, "Trabalhador local que presenciou parte da acao.", RolePed.Testemunha, 5f, 12f);
+                PedDoCaso testemunha = CriarPed(PoolsCaso.ModelosCivil,
+                    "Trabalhador local que presenciou parte da acao de longe.", RolePed.Testemunha, 10f, 16f);
                 caso.AdicionarPed(testemunha);
             }
 
-            // ----- Evidencias: DNA de membros distintos em itens diferentes (cruzamento) -----
+            // ----- Evidencias: DNA de membros distintos (cruzamento) -----
             Evidencia carga = new Evidencia("Carga abandonada", "Parte da carga deixada para tras na fuga.")
             {
                 ModeloProp = Aleatorio.Item(PoolsCaso.PropsCarga),
-                PerfilDnaId = dnasQuadrilha[0],
+                PerfilDnaId = dnas[0],
                 ResultadoForense = "Material genetico recuperado das embalagens manuseadas."
             };
             AplicarOffsetEvidencia(carga, 1f, 4f);
             caso.AdicionarEvidencia(carga);
 
-            Evidencia ferramenta = new Evidencia("Ferramenta de arrombamento", "Instrumento usado para forcar o container/cadeado.")
+            Evidencia ferramenta = new Evidencia("Ferramenta de arrombamento", "Instrumento usado para forcar o container.")
             {
                 ModeloProp = Aleatorio.Item(PoolsCaso.PropsFerramenta),
-                PerfilDnaId = dnasQuadrilha.Count > 1 ? dnasQuadrilha[1] : dnasQuadrilha[0],
+                PerfilDnaId = dnas.Count > 1 ? dnas[1] : dnas[0],
                 ResultadoForense = "DNA na empunhadura. Marcas compativeis com o arrombamento do lacre."
             };
             AplicarOffsetEvidencia(ferramenta, 1f, 4f);
@@ -79,13 +73,13 @@ namespace InvestigacaoBR.Services
             Evidencia celular = new Evidencia("Celular derrubado", "Aparelho perdido por um dos envolvidos na fuga.")
             {
                 ModeloProp = Aleatorio.Item(PoolsCaso.PropsItemPessoal),
-                PerfilDnaId = dnasQuadrilha[dnasQuadrilha.Count - 1],
+                PerfilDnaId = dnas[dnas.Count - 1],
                 ResultadoForense = "Mensagens coordenando o roubo. DNA confirmado no aparelho."
             };
             AplicarOffsetEvidencia(celular, 1f, 4f);
             caso.AdicionarEvidencia(celular);
 
-            // ----- Cameras (1 a 2) -----
+            // ----- Cameras -----
             string[] infos =
             {
                 "Caminhao parado e varios individuos transferindo caixas para outro veiculo.",
@@ -95,15 +89,15 @@ namespace InvestigacaoBR.Services
             int qtdCam = Aleatorio.Inteiro(1, 2);
             for (int i = 0; i < qtdCam; i++)
             {
-                GravacaoCamera cam = CriarCamera(
-                    $"Camera do terminal #{i + 1}",
-                    Aleatorio.Item(infos),
+                caso.AdicionarCamera(CriarCamera(
+                    $"Camera do terminal #{i + 1}", Aleatorio.Item(infos),
                     caso.CenaX, caso.CenaY, caso.CenaZ,
-                    Aleatorio.Real(-15f, 15f), Aleatorio.Real(-15f, 15f), 5f);
-                caso.AdicionarCamera(cam);
+                    Aleatorio.Real(-15f, 15f), Aleatorio.Real(-15f, 15f), 5f));
             }
 
-            Logger.Info($"GeradorRouboCarga: '{caso.Titulo}' gerado ({qtdMembros} membros, {caso.Peds.Count} peds, {caso.Evidencias.Count} evidencias, {caso.Cameras.Count} cameras).");
+            DistribuirAngulos(caso.Peds); // fix #5
+
+            Logger.Info($"GeradorRouboCarga: '{caso.Titulo}' ({qtdMembros} membros, {caso.Peds.Count} peds, {caso.Evidencias.Count} ev, {caso.Cameras.Count} cam).");
             return caso;
         }
     }
