@@ -1,0 +1,14 @@
+# Ignorar pastas de compilação do Visual Studio
+bin/
+obj/
+
+# Ignorar arquivos compilados e logs na raiz ou subpastas
+*.dll
+*.pdb
+*.exe
+*.log
+
+# Ignorar arquivos do próprio Visual Studio
+.vs/
+*.user
+*.suo
