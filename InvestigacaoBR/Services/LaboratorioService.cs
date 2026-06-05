@@ -8,8 +8,8 @@ namespace InvestigacaoBR.Services
 {
     public class LaboratorioService
     {
-        private const int EsperaMinMs = 60000;
-        private const int EsperaMaxMs = 150000;
+        private static int EsperaMinMs => Config.DelayLabMinMs;
+        private static int EsperaMaxMs => Config.DelayLabMaxMs;
 
         private readonly CasoService _casoService;
 

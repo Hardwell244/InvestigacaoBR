@@ -62,9 +62,6 @@ namespace InvestigacaoBR.Services
             // ----- Assaltante (culpado, NAO esta na cena — segunda locacao) -----
             PedDoCaso assaltante = CriarPed(PoolsCaso.ModelosSuspeito,
                 "Assaltante responsavel pela morte. Fugiu do local apos o crime.", RolePed.Indefinido, 0f, 0.1f);
-            // Ped nao aparece na cena — SpawnarMorto = false, mas offset zero = spawn no centro
-            // Solucao: por enquanto deixamos ele como presente mas distante
-            assaltante.OffsetX = 999f; assaltante.OffsetY = 999f; // fora do alcance de spawn (hack)
             assaltante.EhCulpadoReal = true;
             assaltante.PerfilDnaId = dnaAssaltante;
             assaltante.RegistroTelefonico = "Chamadas para receptador de produtos furtados. Compras suspeitas em cash horas depois.";

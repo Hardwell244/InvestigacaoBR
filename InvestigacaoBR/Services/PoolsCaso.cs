@@ -158,7 +158,9 @@ namespace InvestigacaoBR.Services
 
         public static readonly List<string> PropsArmaBranca = new List<string>
         {
-            "prop_cs_knife","w_me_knife_01","prop_w_me_knife_01"
+            "prop_cs_bottle_opaque01",  // frasco/objeto cortante como placeholder
+            "prop_beer_bottle",         // garrafa de vidro
+            "prop_cs_ciggy_01"          // item pessoal descartado (anel/cigarro)
         };
 
         public static readonly List<string> PropsCapsula = new List<string>
@@ -184,12 +186,16 @@ namespace InvestigacaoBR.Services
 
         public static readonly List<string> PropsCarga = new List<string>
         {
-            "prop_box_wood02a_pile","prop_boxpile_07d","ng_proc_box_01a","prop_cs_cardbox_01"
+            "ng_proc_box_01a",       // caixa generica — confirmada valida
+            "prop_cs_cardbox_01",    // caixa de papelao — confirmada valida
+            "prop_boxpile_07d"       // pilha de caixas
         };
 
         public static readonly List<string> PropsFerramenta = new List<string>
         {
-            "prop_tool_boltcutter","prop_tool_crowbar","prop_cs_tablet"
+            "prop_cs_tablet",     // tablet / notebook — confirmado valido
+            "prop_cs_cuffs_01",   // algemas — confirmado valido
+            "prop_phone_ing"      // celular — confirmado valido
         };
 
         public static readonly List<string> PropsSangue = new List<string>

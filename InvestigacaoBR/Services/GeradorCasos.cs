@@ -7,7 +7,6 @@ namespace InvestigacaoBR.Services
 {
     public class GeradorCasos
     {
-        private const int MetaDisponiveis = 3;
 
         private readonly CasoService _casoService;
         private readonly List<GeradorBase> _geradores;
@@ -51,9 +50,9 @@ namespace InvestigacaoBR.Services
         {
             int disponiveis = 0;
             foreach (Caso c in _casoService.ObterDisponiveis()) disponiveis++;
-            if (disponiveis >= MetaDisponiveis) return;
+            if (disponiveis >= Config.MetaCasosPool) return;
 
-            int aGerar = MetaDisponiveis - disponiveis;
+            int aGerar = Config.MetaCasosPool - disponiveis;
             Logger.Info($"Pool com {disponiveis} disponivel(is); gerando {aGerar}.");
             for (int i = 0; i < aGerar; i++)
             {

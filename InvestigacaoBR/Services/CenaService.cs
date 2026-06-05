@@ -34,7 +34,7 @@ namespace InvestigacaoBR.Services
             if (caso == null) { Logger.Warn("SpawnarCena: caso nulo."); return; }
             if (_cenas.ContainsKey(caso.Id)) { Logger.Info($"SpawnarCena ignorado: cena '{caso.Titulo}' ja montada."); return; }
 
-            Logger.Info($"Montando cena do caso '{caso.Titulo}'...");
+            Logger.Info($"Montando cena '{caso.Titulo}'...");
             Vector3 origem = OrigemCena(caso);
             CenaAtiva cena = new CenaAtiva { Origem = origem };
 
@@ -55,14 +55,12 @@ namespace InvestigacaoBR.Services
         private void SpawnarPed(PedDoCaso pedDoCaso, Vector3 origem)
         {
             if (pedDoCaso == null || string.IsNullOrEmpty(pedDoCaso.ModeloPed)) return;
-
-            if (pedDoCaso.NaoSpawnarNaCena) return; // culpado ausente da cena (fugiu)
+            if (pedDoCaso.NaoSpawnarNaCena) return;
 
             try
             {
                 Vector3 pos = origem + new Vector3(pedDoCaso.OffsetX, pedDoCaso.OffsetY, pedDoCaso.OffsetZ);
                 Ped ped = new Ped(new Model(pedDoCaso.ModeloPed), pos, pedDoCaso.Heading);
-
                 if (ped == null || !ped.Exists())
                 {
                     Logger.Warn($"Falha ao spawnar ped '{pedDoCaso.Nome}' (modelo '{pedDoCaso.ModeloPed}').");
@@ -70,20 +68,18 @@ namespace InvestigacaoBR.Services
                 }
 
                 ped.IsPersistent = true;
-                ped.BlockPermanentEvents = true;
                 pedDoCaso.PedVivo = ped;
-
                 _personaService.AplicarIdentidade(ped, pedDoCaso);
 
                 if (pedDoCaso.SpawnarMorto)
                 {
+                    ped.BlockPermanentEvents = true;
                     ped.Kill();
                     SpawnarDecalSangue(pos);
                     Logger.Info($"Ped '{pedDoCaso.Nome}' spawnado MORTO na cena.");
                 }
                 else
                 {
-                    // G1: comportamento baseado no papel do ped
                     AtribuirComportamento(ped, pedDoCaso);
                     Logger.Info($"Ped '{pedDoCaso.Nome}' spawnado na cena [{pedDoCaso.Role}].");
                 }
@@ -91,23 +87,33 @@ namespace InvestigacaoBR.Services
             catch (Exception ex) { Logger.Exception(ex, $"SpawnarPed '{pedDoCaso.Nome}'"); }
         }
 
+        /// <summary>
+        /// FIX: BlockPermanentEvents so para peds que ficam parados (testemunhas/mortos).
+        /// Civis e suspeitos que vagam nao recebem BlockPermanentEvents=true para evitar
+        /// conflito entre a flag e Tasks.Wander() (ped gira em circulos ou para).
+        /// FIX: StandStill usa 30s renovaveis, nao int.MaxValue (congelava IA para sempre).
+        /// </summary>
         private static void AtribuirComportamento(Ped ped, PedDoCaso pedDoCaso)
         {
             try
             {
                 if (pedDoCaso.EhCulpadoReal)
                 {
-                    // Suspeito: anda nervosamente, mas sem fugir ainda (fuga so quando jogador chega perto)
+                    // Suspeito: vaga nervosamente. BlockPermanentEvents ativo para nao reagir
+                    // a eventos do mundo ate o jogador se aproximar (ProcessarFugaSuspeitos cuida disso).
+                    ped.BlockPermanentEvents = true;
                     ped.Tasks.Wander();
                 }
                 else if (pedDoCaso.Role == RolePed.Testemunha)
                 {
-                    // Testemunha: para no lugar, nervosa
-                    ped.Tasks.StandStill(int.MaxValue);
+                    // Testemunha: para parada nervosa (30s renovaveis, nao int.MaxValue).
+                    ped.BlockPermanentEvents = true;
+                    ped.Tasks.StandStill(30000); // FIX: era int.MaxValue — congelava IA permanentemente
                 }
                 else
                 {
-                    // Civil / indefinido: anda normalmente
+                    // Civil indefinido: comportamento natural do GTA, reage ao mundo normalmente.
+                    ped.BlockPermanentEvents = false; // FIX: sem conflito com Wander()
                     ped.Tasks.Wander();
                 }
             }
@@ -121,17 +127,14 @@ namespace InvestigacaoBR.Services
             {
                 Vector3 pos = origem + new Vector3(ev.OffsetX, ev.OffsetY, ev.OffsetZ);
                 Rage.Object prop = new Rage.Object(new Model(ev.ModeloProp), pos);
-
                 if (prop == null || !prop.Exists())
                 {
                     Logger.Warn($"Falha ao spawnar prop '{ev.Titulo}' (modelo '{ev.ModeloProp}').");
                     return;
                 }
-
                 prop.IsPersistent = true;
                 prop.Rotation = new Rotator(0f, 0f, Aleatorio.Real(0f, 360f));
                 AssentarNoChaoAsync(prop, pos.Z);
-
                 ev.PropVivo = prop;
                 Logger.Info($"Prop '{ev.Titulo}' spawnado.");
             }
@@ -141,18 +144,13 @@ namespace InvestigacaoBR.Services
         public void SpawnarFitaIsolamento(Caso caso)
         {
             if (caso == null) return;
-            if (!_cenas.TryGetValue(caso.Id, out CenaAtiva cena))
-            {
-                Logger.Warn($"SpawnarFitaIsolamento: cena '{caso.Titulo}' nao montada.");
-                return;
-            }
+            if (!_cenas.TryGetValue(caso.Id, out CenaAtiva cena)) { Logger.Warn($"SpawnarFitaIsolamento: cena nao montada."); return; }
             try
             {
                 Vector3 origem = OrigemCena(caso);
                 const string modelo = "prop_barrier_work05";
                 const int qtd = 6;
                 const float raio = 5f;
-
                 for (int i = 0; i < qtd; i++)
                 {
                     double ang = (Math.PI * 2.0 / qtd) * i;
@@ -183,12 +181,19 @@ namespace InvestigacaoBR.Services
                 {
                     try
                     {
-                        // Libera como ambient — continuam no mundo
-                        pedDoCaso.PedVivo.IsPersistent = false;
-                        if (!pedDoCaso.SpawnarMorto)
-                            pedDoCaso.PedVivo.BlockPermanentEvents = false;
+                        pedDoCaso.PedVivo.Tasks.Clear();
+                        if (pedDoCaso.SpawnarMorto)
+                        {
+                            // Corpo: apenas desmarca persistent, o jogo limpa naturalmente
+                            pedDoCaso.PedVivo.IsPersistent = false;
+                        }
+                        else
+                        {
+                            // Ped vivo: Dismiss() libera corretamente da engine (FIX: era so IsPersistent=false)
+                            pedDoCaso.PedVivo.Dismiss();
+                        }
                     }
-                    catch (Exception ex) { Logger.Exception(ex, "LimparCena/ped"); }
+                    catch (Exception ex) { Logger.Exception(ex, $"LimparCena/ped '{pedDoCaso.Nome}'"); }
                 }
                 pedDoCaso.PedVivo = null;
             }
@@ -207,14 +212,10 @@ namespace InvestigacaoBR.Services
                         try { prop.Delete(); } catch (Exception ex) { Logger.Exception(ex, "LimparCena/cenario"); }
                 cena.PropsCenario.Clear();
 
-                if (cena.Blip != null)
-                {
-                    try { cena.Blip.Delete(); } catch { }
-                    cena.Blip = null;
-                }
+                if (cena.Blip != null) { try { cena.Blip.Delete(); } catch { } cena.Blip = null; }
             }
 
-            Logger.Info($"Visuais de '{caso.Titulo}' removidos. Peds liberados como ambient.");
+            Logger.Info($"Visuais de '{caso.Titulo}' removidos. Dados preservados.");
         }
 
         public void RemoverCenaCompleta(Caso caso)
@@ -279,8 +280,7 @@ namespace InvestigacaoBR.Services
                 NativeFunction.Natives.ADD_DECAL<int>(
                     14, pos.X, pos.Y, pos.Z,
                     0f, 1f, 0f, 0f, 0f, 1f,
-                    1.5f, 1.5f,
-                    0.8f, 0f, 0f, 1f,
+                    1.5f, 1.5f, 0.8f, 0f, 0f, 1f,
                     false, false);
             }
             catch (Exception ex) { Logger.Exception(ex, "SpawnarDecalSangue"); }

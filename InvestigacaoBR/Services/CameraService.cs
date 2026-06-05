@@ -12,6 +12,11 @@ namespace InvestigacaoBR.Services
         private const Keys TeclaSair = Keys.Back;
         private readonly CasoService _casoService;
 
+        // FIX: flag estatica que o EntryPoint.Finally() desativa para encerrar fibers orfas
+        private static volatile bool _ativo = true;
+
+        public static void Desativar() { _ativo = false; }
+
         public CameraService(CasoService casoService) { _casoService = casoService; }
 
         public void Visualizar(GravacaoCamera gravacao)
@@ -25,7 +30,6 @@ namespace InvestigacaoBR.Services
                 try
                 {
                     Logger.Info($"Abrindo camera '{gravacao.Local}'.");
-
                     cam = NativeFunction.Natives.CREATE_CAM<int>("DEFAULT_SCRIPTED_CAMERA", true);
                     criada = true;
 
@@ -38,7 +42,8 @@ namespace InvestigacaoBR.Services
                     AplicarFiltroCctv(true);
                     Game.DisplayHelp($"Camera: {gravacao.Local}. BACKSPACE para sair.");
 
-                    while (true)
+                    // FIX: era while(true) — a fiber nunca terminava se o plugin fosse descarregado
+                    while (_ativo)
                     {
                         if (Game.IsKeyDown(TeclaSair)) break;
                         GameFiber.Yield();

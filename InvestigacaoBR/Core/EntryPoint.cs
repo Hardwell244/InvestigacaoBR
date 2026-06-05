@@ -16,11 +16,7 @@ namespace InvestigacaoBR.Core
         public const string PluginName = "InvestigacaoBR";
         public const string PluginVersion = "0.1.0";
 
-        private const Keys TeclaMenuCasos = Keys.F6;
-        private const Keys TeclaMenuDetetive = Keys.I;
-        private const Keys TeclaLimparCena = Keys.End;
-        private const Keys TeclaInterrogar = Keys.OemQuestion;
-
+        // Teclas agora vem do Config (InvestigacaoBR.ini) — sem hardcode aqui
         private GameFiber _mainFiber;
         private bool _isRunning;
 
@@ -35,23 +31,28 @@ namespace InvestigacaoBR.Core
         private MenuDetetive _menuDetetive;
         private MenuInterrogatorio _menuInterrogatorio;
 
-        // Timers para checks periodicos
         private int _ticksBlip;
         private int _ticksFuga;
 
-        // G1: rastreia suspeitos que ja tiveram fuga ativada (evita re-trigger)
         private readonly HashSet<Guid> _fugasAtivadas = new HashSet<Guid>();
 
         public override void Initialize()
         {
+            Config.Carregar(); // lê InvestigacaoBR.ini antes de qualquer coisa
             Logger.Info($"{PluginName} v{PluginVersion} - Initialize() chamado.");
             Functions.OnOnDutyStateChanged += OnOnDutyStateChanged;
         }
 
         public override void Finally()
         {
-            Logger.Info("Finally() chamado.");
-            try { PararSistema(); Functions.OnOnDutyStateChanged -= OnOnDutyStateChanged; }
+            Logger.Info("Finally() chamado. Descarregando plugin...");
+            try
+            {
+                CameraService.Desativar();
+                PararSistema();
+                Functions.OnOnDutyStateChanged -= OnOnDutyStateChanged;
+                Logger.Info("Plugin descarregado com sucesso.");
+            }
             catch (Exception ex) { Logger.Exception(ex, "Finally()"); }
         }
 
@@ -133,8 +134,8 @@ namespace InvestigacaoBR.Core
                 {
                     _pool?.Process();
                     ProcessarTeclas();
-                    ProcessarBlipProximidade();   // B3+M1
-                    ProcessarFugaSuspeitos();     // G1: fuga ao se aproximar
+                    ProcessarBlipProximidade();
+                    ProcessarFugaSuspeitos();
                 }
                 catch (Exception ex) { Logger.Exception(ex, "MainLoop/iteracao"); }
                 GameFiber.Yield();
@@ -147,10 +148,11 @@ namespace InvestigacaoBR.Core
         {
             if (_pool == null) return;
 
-            bool teclaF6 = Game.IsKeyDown(TeclaMenuCasos);
-            bool teclaI = Game.IsKeyDown(TeclaMenuDetetive);
+            // Teclas lidas do Config (InvestigacaoBR.ini) — configuravel pelo jogador
+            bool teclaMenuCasos = Game.IsKeyDown(Config.TeclaMenuCasos);
+            bool teclaMenuDetetive = Game.IsKeyDown(Config.TeclaMenuDetetive);
 
-            if (teclaF6 || teclaI)
+            if (teclaMenuCasos || teclaMenuDetetive)
             {
                 if (_pool.AreAnyVisible)
                 {
@@ -158,14 +160,14 @@ namespace InvestigacaoBR.Core
                     _menuDetetive?.Fechar();
                     _menuInterrogatorio?.Fechar();
                 }
-                else if (teclaF6) _menuSelecaoCasos?.Abrir();
+                else if (teclaMenuCasos) _menuSelecaoCasos?.Abrir();
                 else _menuDetetive?.Abrir();
             }
 
-            if (Game.IsKeyDown(TeclaInterrogar) && !_pool.AreAnyVisible)
+            if (Game.IsKeyDown(Config.TeclaInterrogar) && !_pool.AreAnyVisible)
                 TentarInterrogar();
 
-            if (Game.IsKeyDown(TeclaLimparCena))
+            if (Game.IsKeyDown(Config.TeclaLimparCena))
                 LimparCenasAtivas();
         }
 
@@ -175,14 +177,10 @@ namespace InvestigacaoBR.Core
             if (_ticksBlip < 30) return;
             _ticksBlip = 0;
             if (_cenaService == null || Game.LocalPlayer?.Character == null) return;
-            _cenaService.ProcessarBlipsProximidade(Game.LocalPlayer.Character.Position);
+            _cenaService.ProcessarBlipsProximidade(Game.LocalPlayer.Character.Position,
+                Config.RaioBlipProximidade); // raio configuravel
         }
 
-        /// <summary>
-        /// G1: Verifica a cada ~0.5 s se o jogador se aproximou de um culpado.
-        /// Quando chegar a 4 m, o suspeito foge — o jogador precisa interceptar.
-        /// Peds sem mandado emitido nao fogem (o jogador pode investigar sem assustar).
-        /// </summary>
         private void ProcessarFugaSuspeitos()
         {
             _ticksFuga++;
@@ -191,7 +189,7 @@ namespace InvestigacaoBR.Core
 
             if (_casoService == null || Game.LocalPlayer?.Character == null) return;
             Vector3 posJogador = Game.LocalPlayer.Character.Position;
-            const float RaioFuga = 4f;
+            float raioFuga = Config.RaioFuga; // raio configuravel
 
             foreach (Caso caso in _casoService.ObterDoDetetive())
             {
@@ -202,21 +200,14 @@ namespace InvestigacaoBR.Core
                     if (_fugasAtivadas.Contains(ped.Id)) continue;
                     if (ped.PedVivo == null || !ped.PedVivo.Exists() || ped.PedVivo.IsDead) continue;
 
-                    float dist = Vector3.Distance(posJogador, ped.PedVivo.Position);
-                    if (dist > RaioFuga) continue;
+                    if (Vector3.Distance(posJogador, ped.PedVivo.Position) > raioFuga) continue;
 
                     try
                     {
                         ped.PedVivo.BlockPermanentEvents = false;
-                        // Suspeito foge do jogador usando pathfinding do GTA
                         NativeFunction.Natives.TASK_SMART_FLEE_PED(
-                            ped.PedVivo,
-                            Game.LocalPlayer.Character,
-                            200f,   // distancia de fuga em metros
-                            -1,     // duracao (-1 = ate ser interrompido)
-                            false,
-                            false);
-
+                            ped.PedVivo, Game.LocalPlayer.Character,
+                            200f, -1, false, false);
                         _fugasAtivadas.Add(ped.Id);
                         Notificacao.Alerta($"{ped.Nome} esta fugindo! Intercepte-o.");
                         Logger.Info($"Suspeito '{ped.Nome}' em fuga.");
@@ -230,7 +221,7 @@ namespace InvestigacaoBR.Core
         {
             if (_casoService == null || _menuInterrogatorio == null) return;
             Vector3 posJogador = Game.LocalPlayer.Character.Position;
-            const float Raio = 3f;
+            float raio = Config.RaioInterrogacao; // raio configuravel
 
             PedDoCaso pedAlvo = null;
             Caso casoAlvo = null;
@@ -243,12 +234,12 @@ namespace InvestigacaoBR.Core
                 {
                     if (ped.PedVivo == null || !ped.PedVivo.Exists() || ped.SpawnarMorto) continue;
                     float dist = Vector3.Distance(posJogador, ped.PedVivo.Position);
-                    if (dist < Raio && dist < menorDist) { menorDist = dist; pedAlvo = ped; casoAlvo = caso; }
+                    if (dist < raio && dist < menorDist) { menorDist = dist; pedAlvo = ped; casoAlvo = caso; }
                 }
             }
 
             if (pedAlvo != null) _menuInterrogatorio.AbrirParaPed(pedAlvo, casoAlvo);
-            else Notificacao.Aviso("Nenhum individuo do caso proximo. Chegue a 3 m de um ped da cena.");
+            else Notificacao.Aviso($"Nenhum individuo proximo ({raio:F0} m). Chegue mais perto.");
         }
 
         private void LimparCenasAtivas()
@@ -260,36 +251,22 @@ namespace InvestigacaoBR.Core
 
             if (limpas > 0)
             {
-                Notificacao.Aviso($"END: {limpas} cena(s) limpa(s). Peds liberados, casos seguem ativos.");
+                Notificacao.Aviso($"END: {limpas} cena(s) limpa(s). Casos seguem ativos.");
                 Logger.Info($"END: {limpas} cena(s) limpa(s).");
             }
         }
 
-        /// <summary>
-        /// Fase 4: pre-carrega todos os dicionarios de textura usados nas notificacoes.
-        /// Embora o wiki RAGE MP indique "Works without requesting" para CHAR_,
-        /// fazemos o request para garantir compatibilidade total no RPH/LSPDFR.
-        /// </summary>
         private void CarregarTodosDicionarios()
         {
             string[] dicts =
             {
-                "WEB_LOSSANTOSPOLICEDEPT",  // LSPD oficial
-                "CHAR_DAVE",                // detetive / investigacao
-                "CHAR_BLOCKED",             // aviso / bloqueio
-                "CHAR_CALL911",             // alerta / emergencia
-                "CHAR_MP_FIB_CONTACT",      // lab forense / FIB
-                "CHAR_FILMNOIR",            // camera / vigilancia
-                "CHAR_MAUDE",               // mandado / captura
-                "CHAR_GANGAPP",             // crime organizado / gangue
-                "CHAR_AMMUNATION",          // balistica / armas
-                "CHAR_BANK_MAZE",           // crime financeiro
-                "CHAR_DETONATEPHONE",       // urgente / sequestro
-                "CHAR_DETONATEBOMB",        // incendio / explosao
-                "CHAR_CARSITE"              // roubo de veiculo
+                "WEB_LOSSANTOSPOLICEDEPT", "CHAR_DAVE",     "CHAR_BLOCKED",
+                "CHAR_CALL911",            "CHAR_MP_FIB_CONTACT", "CHAR_FILMNOIR",
+                "CHAR_MAUDE",              "CHAR_GANGAPP",  "CHAR_AMMUNATION",
+                "CHAR_BANK_MAZE",          "CHAR_DETONATEPHONE",  "CHAR_DETONATEBOMB",
+                "CHAR_CARSITE"
             };
-            foreach (string d in dicts)
-                CarregarDicionarioTextura(d);
+            foreach (string d in dicts) CarregarDicionarioTextura(d);
         }
 
         private void CarregarDicionarioTextura(string txtDict)
