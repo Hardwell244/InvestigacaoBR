@@ -12,12 +12,17 @@ namespace InvestigacaoBR.UI
     {
         private readonly NativeMenu _menu;
         private readonly CasoService _casoService;
+        private readonly DetectiveService _detectiveService; // 5D
+        private readonly PartnerService _partnerService;   // 5B
         private PedDoCaso _ped;
         private Caso _caso;
 
-        public MenuInterrogatorio(ObjectPool pool, CasoService casoService)
+        public MenuInterrogatorio(ObjectPool pool, CasoService casoService,
+            DetectiveService detectiveService, PartnerService partnerService)
         {
             _casoService = casoService;
+            _detectiveService = detectiveService;
+            _partnerService = partnerService;
             _menu = new NativeMenu("INTERROGATORIO", "Abordagem");
             pool.Add(_menu);
         }
@@ -41,39 +46,81 @@ namespace InvestigacaoBR.UI
             string nome = _ped.DataNascimento != DateTime.MinValue ? _ped.Nome : "Individuo nao identificado";
             _menu.Name = nome;
 
-            NativeItem q1 = new NativeItem("\"O que voce viu aqui?\"", "Pergunta sobre o evento e possivel suspeito.");
+            // ===== Perguntas =====
+            NativeItem q1 = new NativeItem("\"O que voce viu aqui?\"", "Pergunta sobre o evento e o suspeito.");
             NativeItem q2 = new NativeItem("\"Conhece alguem suspeito nessa area?\"", "Pergunta sobre suspeitos e relacoes.");
             NativeItem q3 = new NativeItem("\"Onde estava quando aconteceu?\"", "Questiona alibi e horario.");
-            NativeItem q4 = new NativeItem("\"Pode descrever melhor o que viu?\"", "Pede mais detalhes — so para testemunha.");
+            NativeItem q4 = new NativeItem("\"Pode descrever melhor o que viu?\"", "Mais detalhes — so para testemunha.");
 
             q4.Enabled = _ped.Role == RolePed.Testemunha;
 
             q1.Activated += (s, e) => Notificacao.Info(RespostaQ1());
             q2.Activated += (s, e) => Notificacao.Info(RespostaQ2());
             q3.Activated += (s, e) => Notificacao.Info(RespostaQ3());
-            q4.Activated += (s, e) => Notificacao.Info(RespostaQ4Testemunha());
+            q4.Activated += (s, e) => Notificacao.Info(RespostaQ4());
 
+            _menu.Add(q1);
+            _menu.Add(q2);
+            _menu.Add(q3);
+            _menu.Add(q4);
+
+            // ===== Registrar como testemunha =====
             if (_ped.Role == RolePed.Indefinido)
             {
-                NativeItem marcar = new NativeItem("Registrar como Testemunha",
-                    "Classifica este individuo como testemunha no caso.");
+                NativeItem marcar = new NativeItem("Registrar como Testemunha", "Classifica este individuo como testemunha.");
                 marcar.Activated += (s, e) =>
                 {
                     _ped.AlterarRole(RolePed.Testemunha);
                     _casoService.Salvar();
+                    TimelineService.Registrar(_caso.Id, $"{_ped.Nome} registrado como Testemunha.", "DETETIVE");
                     Notificacao.Sucesso($"{_ped.Nome} registrado como Testemunha.");
                     Rebuild();
                 };
                 _menu.Add(marcar);
             }
 
+            // ===== 5D: Propina (so para culpados) =====
+            if (_ped.EhCulpadoReal)
+            {
+                int valor = ValorPropina(_caso?.Titulo ?? "");
+                NativeItem iPropina = new NativeItem(
+                    $"Aceitar propina (${valor}k)",
+                    $"~r~Corrupcao.~w~ Fechar os olhos em troca de ${valor}.000. Rep -12. Int -15.");
+                NativeItem iRecusar = new NativeItem(
+                    "Recusar propina",
+                    "Manter a integridade. Rep +2. Int +3.");
+
+                iPropina.Activated += (s, e) =>
+                {
+                    _detectiveService?.RegistrarPropina(valor);
+                    _partnerService?.ComentarPropina(_caso.Id);
+                    TimelineService.Registrar(_caso.Id,
+                        $"[CORRUPCAO] {_ped.Nome} ofereceu propina de ${valor}k. Aceita.", "CORRUPCAO");
+                    _ped.AlterarRole(RolePed.Inocente); // encobre o culpado
+                    _casoService.Salvar();
+                    Notificacao.Aviso($"${valor}.000 'transferidos'. Nao aparece no relatorio.");
+                    Fechar();
+                };
+
+                iRecusar.Activated += (s, e) =>
+                {
+                    _detectiveService?.RegistrarPropinarRecusada();
+                    _partnerService?.ComentarPropina(_caso.Id);
+                    TimelineService.Registrar(_caso.Id,
+                        $"{_ped.Nome} ofereceu propina de ${valor}k. Recusada.", "DETETIVE");
+                    _casoService.Salvar();
+                    Notificacao.Sucesso("Propina recusada. Integridade mantida.");
+                    Rebuild();
+                };
+
+                _menu.Add(new NativeItem("--- Proposta ---") { Enabled = false });
+                _menu.Add(iPropina);
+                _menu.Add(iRecusar);
+            }
+
+            // ===== Encerrar =====
             NativeItem encerrar = new NativeItem("Encerrar abordagem");
             encerrar.Activated += (s, e) => Fechar();
-
-            _menu.Add(q1);
-            _menu.Add(q2);
-            _menu.Add(q3);
-            _menu.Add(q4);
             _menu.Add(encerrar);
         }
 
@@ -84,41 +131,34 @@ namespace InvestigacaoBR.UI
             switch (_ped.Role)
             {
                 case RolePed.Testemunha:
+                    string dir = DirecaoFugaCulpado();
+                    return Aleatorio.Item(new List<string>
                     {
-                        // G5: usa a direcao real de fuga do culpado baseada nas coordenadas do caso
-                        string dir = DirecaoFugaCulpado();
-                        return Aleatorio.Item(new List<string>
-                    {
-                        $"{_ped.Nome}: \"Vi uma pessoa saindo correndo em direcao ao {dir}. Roupas escuras, andava muito rapido. Parecia nervosa.\"",
-                        $"{_ped.Nome}: \"Tinha um individuo indo embora rapidinho pelo lado {dir}. Entrou numa rua lateral e sumiu.\"",
-                        $"{_ped.Nome}: \"Ouvi o barulho e quando olhei, vi uma silhueta correndo sentido {dir}. Nao vi o rosto, mas era alto.\"",
+                        $"{_ped.Nome}: \"Vi alguem saindo correndo em direcao ao {dir}. Roupas escuras, andava muito rapido.\"",
+                        $"{_ped.Nome}: \"Tinha um individuo indo embora pelo lado {dir}. Entrou numa rua lateral e sumiu.\"",
+                        $"{_ped.Nome}: \"Ouvi o barulho e quando olhei, vi uma silhueta correndo sentido {dir}.\"",
                     });
-                    }
-
                 case RolePed.Culpado:
                     return Aleatorio.Item(new List<string>
                     {
-                        $"{_ped.Nome}: \"Cheguei aqui agora, nao vi absolutamente nada. Por que to sendo interrogado?\"",
-                        $"{_ped.Nome}: \"Olha, to passando por aqui so. Nao meto o nariz em coisa dos outros.\"",
-                        $"{_ped.Nome}: \"Nao sei de nada. Quer saber de verdade? Fala com outro.\"",
+                        $"{_ped.Nome}: \"Cheguei agora. Nao vi absolutamente nada. Por que to sendo interrogado?\"",
+                        $"{_ped.Nome}: \"To passando por aqui so. Nao meto o nariz em coisa dos outros.\"",
+                        $"{_ped.Nome}: \"Nao sei de nada. Fala com outro.\"",
                     });
-
                 case RolePed.Inocente:
                     return Aleatorio.Item(new List<string>
                     {
-                        $"{_ped.Nome}: \"Estava de costas quando aconteceu. Ouvi alguma coisa mas nao vi ninguem. Sinto muito.\"",
-                        $"{_ped.Nome}: \"Estava no telefone. Quando levantei a cabeca ja tinha gente correndo por aqui.\"",
+                        $"{_ped.Nome}: \"Estava de costas. Ouvi alguma coisa mas nao vi ninguem. Sinto muito.\"",
+                        $"{_ped.Nome}: \"Estava no telefone. Quando levantei a cabeca ja tinha gente correndo.\"",
                     });
-
                 case RolePed.PessoaDeInteresse:
                     return Aleatorio.Item(new List<string>
                     {
-                        $"{_ped.Nome}: \"Por que ta me perguntando isso? Eu nao vi nada. Pode deixar eu ir embora?\"",
-                        $"{_ped.Nome}: \"Vi algumas pessoas, sim. Mas nao to aqui pra te contar a vida delas.\"",
+                        $"{_ped.Nome}: \"Por que ta me perguntando isso? Pode falar com outro.\"",
+                        $"{_ped.Nome}: \"Vi algumas pessoas. Nao sei te dizer mais.\"",
                     });
-
                 default:
-                    return $"{_ped.Nome}: \"Nao tenho nada a declarar, inspetor.\"";
+                    return $"{_ped.Nome}: \"Nao tenho nada a declarar.\"";
             }
         }
 
@@ -129,24 +169,15 @@ namespace InvestigacaoBR.UI
                 case RolePed.Testemunha:
                     return Aleatorio.Item(new List<string>
                     {
-                        $"{_ped.Nome}: \"Tinha um cara que eu nunca vi nessa area ficando circulando por aqui ha alguns dias. Parecia estar observando as pessoas.\"",
-                        $"{_ped.Nome}: \"Nao reconheco ninguem especificamente, mas o sujeito que vi hoje nao e daqui. O modo de vestir era diferente.\"",
-                        $"{_ped.Nome}: \"Passei aqui ontem e vi o mesmo cara encostado ali. Ficava olhando pras pessoas. Me deixou desconfortavel.\"",
+                        $"{_ped.Nome}: \"Tinha um cara que nunca vi por aqui ficando circulando nessa area.\"",
+                        $"{_ped.Nome}: \"O sujeito que vi indo embora nao e daqui. O estilo era diferente.\"",
                     });
-
                 case RolePed.Culpado:
                     return Aleatorio.Item(new List<string>
                     {
-                        $"{_ped.Nome}: \"Nao conhco ninguem suspeito. Todo mundo aqui e honesto.\"",
-                        $"{_ped.Nome}: \"Aqui todo mundo se da bem. Suspeito de que? De quem?\"",
+                        $"{_ped.Nome}: \"Nao conhco ninguem suspeito. Aqui e tranquilo.\"",
+                        $"{_ped.Nome}: \"Todo mundo aqui e trabalhador.\"",
                     });
-
-                case RolePed.Inocente:
-                    return $"{_ped.Nome}: \"Nao, nenhum. Sou novo nessa area, mal conhco os vizinhos.\"";
-
-                case RolePed.PessoaDeInteresse:
-                    return $"{_ped.Nome}: \"Eu nao fico apontando dedo pra ninguem. Cuida do seu servico.\"";
-
                 default:
                     return $"{_ped.Nome}: \"Nao conhco ninguem por aqui.\"";
             }
@@ -159,71 +190,53 @@ namespace InvestigacaoBR.UI
                 case RolePed.Testemunha:
                     return Aleatorio.Item(new List<string>
                     {
-                        $"{_ped.Nome}: \"Estava bem aqui esperando uma ligacao. Faz tipo 15 a 20 minutos que aquilo aconteceu. Vi tudo.\"",
-                        $"{_ped.Nome}: \"Estava sentado ali na esquina. Vi a movimentacao de longe mas fiquei com medo de me aproximar.\"",
-                        $"{_ped.Nome}: \"Fui comprar alguma coisa na loja e quando voltei ja tinha aquela situacao. Isso foi ha uns 25 minutos.\"",
+                        $"{_ped.Nome}: \"Estava bem aqui, esperando uma ligacao. Faz tipo 20 minutos.\"",
+                        $"{_ped.Nome}: \"Estava sentado ali. Vi a movimentacao de longe.\"",
                     });
-
                 case RolePed.Culpado:
                     return Aleatorio.Item(new List<string>
                     {
-                        $"{_ped.Nome}: \"Cheguei aqui agora ha pouco. Quando isso aconteceu eu nem tinha chegado ainda.\"",
-                        $"{_ped.Nome}: \"Alibi? Eu nao tenho que provar nada. To so passando por aqui.\"",
+                        $"{_ped.Nome}: \"Cheguei agora. Quando isso aconteceu eu nem tinha chegado.\"",
+                        $"{_ped.Nome}: \"Alibi? Nao tenho que provar nada. To so passando.\"",
                     });
-
-                case RolePed.Inocente:
-                    return $"{_ped.Nome}: \"Estava no bloco do lado. Vim ver a movimentacao quando ouvi o barulho.\"";
-
-                case RolePed.PessoaDeInteresse:
-                    return $"{_ped.Nome}: \"Faz uns 40 minutos que to aqui. Mas isso e la com o meu tempo, nao e?\"";
-
                 default:
                     return $"{_ped.Nome}: \"Por aqui mesmo, passando.\"";
             }
         }
 
-        /// <summary>
-        /// G7: Quarta pergunta — so disponivel para Testemunha. Da mais detalhes sobre o suspeito.
-        /// </summary>
-        private string RespostaQ4Testemunha()
+        private string RespostaQ4()
         {
             if (_ped.Role != RolePed.Testemunha)
                 return $"{_ped.Nome}: \"Nao tenho mais nada a acrescentar.\"";
-
             string dir = DirecaoFugaCulpado();
             return Aleatorio.Item(new List<string>
             {
-                $"{_ped.Nome}: \"Era alto, medio. Roupas escuras. Saiu em direcao ao {dir} sem olhar pra tras. Parecia que sabia exatamente pra onde ia.\"",
-                $"{_ped.Nome}: \"Moreno, roupas simples. Foi pra direcao {dir} rapidao. Vi ele entrar em algum lugar por la, nao sei dizer qual.\"",
-                $"{_ped.Nome}: \"Usava capuz. Nao vi a cor da pele nem o rosto. Foi sumindo sentido {dir} e entrou num beco. Rapido demais.\"",
+                $"{_ped.Nome}: \"Era alto, medio. Roupas escuras. Saiu em direcao ao {dir} sem olhar pra tras.\"",
+                $"{_ped.Nome}: \"Moreno, roupas simples. Foi pra direcao {dir} rapidao. Entrou num lugar por la.\"",
             });
         }
 
-        // ===== HELPER: direcao de fuga do culpado =====
-
-        /// <summary>
-        /// G5: Calcula a direcao cardeal do LocalConhecido do culpado em relacao a origem da cena.
-        /// Usada para dar pistas de direcao de fuga nas respostas das testemunhas.
-        /// </summary>
         private string DirecaoFugaCulpado()
         {
             if (_caso == null) return "direcao desconhecida";
-
             PedDoCaso culpado = null;
-            foreach (PedDoCaso p in _caso.Peds)
-                if (p.EhCulpadoReal) { culpado = p; break; }
-
-            if (culpado == null) return "direcao desconhecida";
-            if (culpado.LocalConhecidoX == 0f && culpado.LocalConhecidoY == 0f) return "direcao desconhecida";
-
+            foreach (PedDoCaso p in _caso.Peds) if (p.EhCulpadoReal) { culpado = p; break; }
+            if (culpado == null || (culpado.LocalConhecidoX == 0f && culpado.LocalConhecidoY == 0f)) return "direcao desconhecida";
             float dx = culpado.LocalConhecidoX - _caso.CenaX;
             float dy = culpado.LocalConhecidoY - _caso.CenaY;
+            if (Math.Abs(dy) >= Math.Abs(dx)) return dy >= 0f ? "norte" : "sul";
+            return dx >= 0f ? "leste" : "oeste";
+        }
 
-            // GTA V: X = leste, Y = norte
-            if (Math.Abs(dy) >= Math.Abs(dx))
-                return dy >= 0f ? "norte" : "sul";
-            else
-                return dx >= 0f ? "leste" : "oeste";
+        private static int ValorPropina(string titulo)
+        {
+            if (titulo.StartsWith("Assassinato")) return 50;
+            if (titulo.StartsWith("Sequestro")) return 40;
+            if (titulo.StartsWith("Lavagem")) return 35;
+            if (titulo.StartsWith("Trafico Armas")) return 30;
+            if (titulo.StartsWith("Chacina")) return 25;
+            if (titulo.StartsWith("Trafico") || titulo.StartsWith("Lab")) return 20;
+            return 15;
         }
     }
 }

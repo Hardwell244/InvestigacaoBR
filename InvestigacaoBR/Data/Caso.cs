@@ -44,6 +44,9 @@ namespace InvestigacaoBR.Data
         public List<Evidencia> Evidencias { get; set; }
         public List<GravacaoCamera> Cameras { get; set; }
 
+        /// <summary>Diario cronologico da investigacao. Entradas adicionadas pelo TimelineService.</summary>
+        public List<TimelineEntry> Timeline { get; set; }
+
         // ----- Construtores -----
         /// <summary>Construtor sem parametros: OBRIGATORIO para serializacao XML. Nao remover.</summary>
         public Caso()
@@ -57,6 +60,7 @@ namespace InvestigacaoBR.Data
             CenaIsolada = false;
             CenaProcessada = false;
             Peds = new List<PedDoCaso>();
+            Timeline = new List<TimelineEntry>();
             Evidencias = new List<Evidencia>();
             Cameras = new List<GravacaoCamera>();
         }

@@ -16,29 +16,32 @@ namespace InvestigacaoBR.Core
         public const string PluginName = "InvestigacaoBR";
         public const string PluginVersion = "0.1.0";
 
-        // Teclas agora vem do Config (InvestigacaoBR.ini) — sem hardcode aqui
         private GameFiber _mainFiber;
         private bool _isRunning;
 
         private ObjectPool _pool;
+        private DetectiveService _detectiveService;
         private CasoService _casoService;
         private CenaService _cenaService;
         private LaboratorioService _laboratorioService;
         private CameraService _cameraService;
         private MandadoService _mandadoService;
         private GeradorCasos _geradorCasos;
+        private PartnerService _partnerService;      // 5B
+        private EventoVivoService _eventoVivoService;   // 5C
         private MenuSelecaoCasos _menuSelecaoCasos;
         private MenuDetetive _menuDetetive;
         private MenuInterrogatorio _menuInterrogatorio;
 
         private int _ticksBlip;
         private int _ticksFuga;
+        private int _ticksParceiro;  // 5B: throttle do partner tick
 
         private readonly HashSet<Guid> _fugasAtivadas = new HashSet<Guid>();
 
         public override void Initialize()
         {
-            Config.Carregar(); // lê InvestigacaoBR.ini antes de qualquer coisa
+            Config.Carregar();
             Logger.Info($"{PluginName} v{PluginVersion} - Initialize() chamado.");
             Functions.OnOnDutyStateChanged += OnOnDutyStateChanged;
         }
@@ -49,6 +52,7 @@ namespace InvestigacaoBR.Core
             try
             {
                 CameraService.Desativar();
+                _partnerService?.Parar(); // 5B: despawna parceiro
                 PararSistema();
                 Functions.OnOnDutyStateChanged -= OnOnDutyStateChanged;
                 Logger.Info("Plugin descarregado com sucesso.");
@@ -58,7 +62,7 @@ namespace InvestigacaoBR.Core
 
         private void OnOnDutyStateChanged(bool onDuty)
         {
-            Logger.Info($"OnOnDutyStateChanged: jogador {(onDuty ? "ENTROU EM" : "SAIU DE")} servico.");
+            Logger.Info($"OnOnDutyStateChanged: {(onDuty ? "ENTROU EM" : "SAIU DE")} servico.");
             if (onDuty) IniciarSistema();
             else PararSistema();
         }
@@ -72,10 +76,29 @@ namespace InvestigacaoBR.Core
             try
             {
                 if (_pool == null) ConstruirServicosEUI();
+
                 _casoService.Inicializar();
+                TimelineService.Inicializar(_casoService);
+
+                // Nome do personagem do LSPDFR
+                string nomeJogador = "Detetive";
+                try
+                {
+                    var persona = Functions.GetPersonaForPed(Game.LocalPlayer.Character);
+                    if (persona != null) nomeJogador = $"{persona.Forename} {persona.Surname}".Trim();
+                }
+                catch { }
+
+                _detectiveService.Inicializar(nomeJogador);
+
+                // 5B: inicia parceiro com base no perfil carregado
+                int indiceParceiro = _detectiveService.Perfil?.IndiceParceiro ?? 0;
+                _partnerService.Iniciar(indiceParceiro);
+
                 _laboratorioService.RetomarAnalisesPendentes(_casoService.ObterTodos());
                 _mandadoService.RestaurarRastreamentos(_casoService.ObterTodos());
                 _geradorCasos.GarantirPool();
+
                 Logger.Info("Sistema pronto.");
             }
             catch (Exception ex) { Logger.Exception(ex, "IniciarSistema"); }
@@ -94,11 +117,16 @@ namespace InvestigacaoBR.Core
             _cameraService = new CameraService(_casoService);
             _mandadoService = new MandadoService(_casoService);
             _geradorCasos = new GeradorCasos(_casoService);
+            _detectiveService = new DetectiveService();
+            _partnerService = new PartnerService();
+            _eventoVivoService = new EventoVivoService(_casoService);
 
             _menuSelecaoCasos = new MenuSelecaoCasos(_pool, _casoService, _cenaService, _geradorCasos);
             _menuDetetive = new MenuDetetive(_pool, _casoService, _cenaService,
-                                      _laboratorioService, _cameraService, _mandadoService, _geradorCasos);
-            _menuInterrogatorio = new MenuInterrogatorio(_pool, _casoService);
+                                      _laboratorioService, _cameraService, _mandadoService,
+                                      _geradorCasos, _detectiveService, _partnerService);
+            _menuInterrogatorio = new MenuInterrogatorio(
+                                      _pool, _casoService, _detectiveService, _partnerService);
 
             Logger.Info("Servicos e UI construidos.");
         }
@@ -110,6 +138,7 @@ namespace InvestigacaoBR.Core
             Logger.State("Sistema investigativo", "Rodando", "Parado");
             try
             {
+                _partnerService?.Parar();
                 _mandadoService?.RemoverTodos();
                 try { NativeFunction.Natives.RENDER_SCRIPT_CAMS(false, false, 0, true, false); } catch { }
             }
@@ -136,6 +165,8 @@ namespace InvestigacaoBR.Core
                     ProcessarTeclas();
                     ProcessarBlipProximidade();
                     ProcessarFugaSuspeitos();
+                    ProcessarParceiro();      // 5B
+                    ProcessarEventosVivos();  // 5C
                 }
                 catch (Exception ex) { Logger.Exception(ex, "MainLoop/iteracao"); }
                 GameFiber.Yield();
@@ -144,11 +175,11 @@ namespace InvestigacaoBR.Core
             Logger.Info("MainFiber encerrado.");
         }
 
+        // ===== CHECKS DO LOOP =====
+
         private void ProcessarTeclas()
         {
             if (_pool == null) return;
-
-            // Teclas lidas do Config (InvestigacaoBR.ini) — configuravel pelo jogador
             bool teclaMenuCasos = Game.IsKeyDown(Config.TeclaMenuCasos);
             bool teclaMenuDetetive = Game.IsKeyDown(Config.TeclaMenuDetetive);
 
@@ -164,11 +195,8 @@ namespace InvestigacaoBR.Core
                 else _menuDetetive?.Abrir();
             }
 
-            if (Game.IsKeyDown(Config.TeclaInterrogar) && !_pool.AreAnyVisible)
-                TentarInterrogar();
-
-            if (Game.IsKeyDown(Config.TeclaLimparCena))
-                LimparCenasAtivas();
+            if (Game.IsKeyDown(Config.TeclaInterrogar) && !_pool.AreAnyVisible) TentarInterrogar();
+            if (Game.IsKeyDown(Config.TeclaLimparCena)) LimparCenasAtivas();
         }
 
         private void ProcessarBlipProximidade()
@@ -177,8 +205,7 @@ namespace InvestigacaoBR.Core
             if (_ticksBlip < 30) return;
             _ticksBlip = 0;
             if (_cenaService == null || Game.LocalPlayer?.Character == null) return;
-            _cenaService.ProcessarBlipsProximidade(Game.LocalPlayer.Character.Position,
-                Config.RaioBlipProximidade); // raio configuravel
+            _cenaService.ProcessarBlipsProximidade(Game.LocalPlayer.Character.Position, Config.RaioBlipProximidade);
         }
 
         private void ProcessarFugaSuspeitos()
@@ -186,10 +213,9 @@ namespace InvestigacaoBR.Core
             _ticksFuga++;
             if (_ticksFuga < 30) return;
             _ticksFuga = 0;
-
             if (_casoService == null || Game.LocalPlayer?.Character == null) return;
             Vector3 posJogador = Game.LocalPlayer.Character.Position;
-            float raioFuga = Config.RaioFuga; // raio configuravel
+            float raioFuga = Config.RaioFuga;
 
             foreach (Caso caso in _casoService.ObterDoDetetive())
             {
@@ -199,15 +225,12 @@ namespace InvestigacaoBR.Core
                     if (!ped.EhCulpadoReal || !ped.MandadoEmitido) continue;
                     if (_fugasAtivadas.Contains(ped.Id)) continue;
                     if (ped.PedVivo == null || !ped.PedVivo.Exists() || ped.PedVivo.IsDead) continue;
-
                     if (Vector3.Distance(posJogador, ped.PedVivo.Position) > raioFuga) continue;
-
                     try
                     {
                         ped.PedVivo.BlockPermanentEvents = false;
                         NativeFunction.Natives.TASK_SMART_FLEE_PED(
-                            ped.PedVivo, Game.LocalPlayer.Character,
-                            200f, -1, false, false);
+                            ped.PedVivo, Game.LocalPlayer.Character, 200f, -1, false, false);
                         _fugasAtivadas.Add(ped.Id);
                         Notificacao.Alerta($"{ped.Nome} esta fugindo! Intercepte-o.");
                         Logger.Info($"Suspeito '{ped.Nome}' em fuga.");
@@ -217,12 +240,29 @@ namespace InvestigacaoBR.Core
             }
         }
 
+        /// <summary>5B: Tick do parceiro a cada 60 frames (~1s). Mais leve que todo frame.</summary>
+        private void ProcessarParceiro()
+        {
+            _ticksParceiro++;
+            if (_ticksParceiro < 60) return;
+            _ticksParceiro = 0;
+            if (Game.LocalPlayer?.Character == null) return;
+            _partnerService?.Tick();
+        }
+
+        /// <summary>5C: Tick dos eventos vivos — EventoVivoService controla timer interno.</summary>
+        private void ProcessarEventosVivos()
+        {
+            _eventoVivoService?.Tick();
+        }
+
+        // ===== ACOES =====
+
         private void TentarInterrogar()
         {
             if (_casoService == null || _menuInterrogatorio == null) return;
             Vector3 posJogador = Game.LocalPlayer.Character.Position;
-            float raio = Config.RaioInterrogacao; // raio configuravel
-
+            float raio = Config.RaioInterrogacao;
             PedDoCaso pedAlvo = null;
             Caso casoAlvo = null;
             float menorDist = float.MaxValue;
@@ -248,23 +288,15 @@ namespace InvestigacaoBR.Core
             int limpas = 0;
             foreach (Caso caso in _casoService.ObterDoDetetive())
                 if (_cenaService.CenaMontada(caso.Id)) { _cenaService.LimparCena(caso); limpas++; }
-
-            if (limpas > 0)
-            {
-                Notificacao.Aviso($"END: {limpas} cena(s) limpa(s). Casos seguem ativos.");
-                Logger.Info($"END: {limpas} cena(s) limpa(s).");
-            }
+            if (limpas > 0) { Notificacao.Aviso($"END: {limpas} cena(s) limpa(s)."); Logger.Info($"END: {limpas} cena(s)."); }
         }
 
         private void CarregarTodosDicionarios()
         {
-            string[] dicts =
-            {
-                "WEB_LOSSANTOSPOLICEDEPT", "CHAR_DAVE",     "CHAR_BLOCKED",
-                "CHAR_CALL911",            "CHAR_MP_FIB_CONTACT", "CHAR_FILMNOIR",
-                "CHAR_MAUDE",              "CHAR_GANGAPP",  "CHAR_AMMUNATION",
-                "CHAR_BANK_MAZE",          "CHAR_DETONATEPHONE",  "CHAR_DETONATEBOMB",
-                "CHAR_CARSITE"
+            string[] dicts = {
+                "WEB_LOSSANTOSPOLICEDEPT","CHAR_DAVE","CHAR_BLOCKED","CHAR_CALL911",
+                "CHAR_MP_FIB_CONTACT","CHAR_FILMNOIR","CHAR_MAUDE","CHAR_GANGAPP",
+                "CHAR_AMMUNATION","CHAR_BANK_MAZE","CHAR_DETONATEPHONE","CHAR_DETONATEBOMB","CHAR_CARSITE"
             };
             foreach (string d in dicts) CarregarDicionarioTextura(d);
         }
@@ -274,8 +306,8 @@ namespace InvestigacaoBR.Core
             if (!NativeFunction.Natives.HAS_STREAMED_TEXTURE_DICT_LOADED<bool>(txtDict))
             {
                 NativeFunction.Natives.REQUEST_STREAMED_TEXTURE_DICT(txtDict, true);
-                int tentativas = 0;
-                while (!NativeFunction.Natives.HAS_STREAMED_TEXTURE_DICT_LOADED<bool>(txtDict) && tentativas++ < 300)
+                int t = 0;
+                while (!NativeFunction.Natives.HAS_STREAMED_TEXTURE_DICT_LOADED<bool>(txtDict) && t++ < 300)
                     GameFiber.Yield();
             }
         }

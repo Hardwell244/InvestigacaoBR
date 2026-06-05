@@ -74,21 +74,28 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="InvestigacaoBR\Core\Aleatorio.cs" />
+    <Compile Include="InvestigacaoBR\Core\Config.cs" />
     <Compile Include="InvestigacaoBR\Core\EntryPoint.cs" />
     <Compile Include="InvestigacaoBR\Core\Logger.cs" />
     <Compile Include="InvestigacaoBR\Core\Notificacao.cs" />
     <Compile Include="InvestigacaoBR\Core\TempoJogo.cs" />
     <Compile Include="InvestigacaoBR\Data\Caso.cs" />
+    <Compile Include="InvestigacaoBR\Data\DetectiveProfile.cs" />
     <Compile Include="InvestigacaoBR\Data\EstadoEvidencia.cs" />
     <Compile Include="InvestigacaoBR\Data\Evidencia.cs" />
     <Compile Include="InvestigacaoBR\Data\GravacaoCamera.cs" />
+    <Compile Include="InvestigacaoBR\Data\Partner.cs" />
     <Compile Include="InvestigacaoBR\Data\PedDoCaso.cs" />
+    <Compile Include="InvestigacaoBR\Data\Rank.cs" />
     <Compile Include="InvestigacaoBR\Data\RolePed.cs" />
     <Compile Include="InvestigacaoBR\Data\StatusCaso.cs" />
+    <Compile Include="InvestigacaoBR\Data\TimelineEntry.cs" />
     <Compile Include="InvestigacaoBR\Services\CameraService.cs" />
     <Compile Include="InvestigacaoBR\Services\CasoRepository.cs" />
     <Compile Include="InvestigacaoBR\Services\CasoService.cs" />
     <Compile Include="InvestigacaoBR\Services\CenaService.cs" />
+    <Compile Include="InvestigacaoBR\Services\DetectiveService.cs" />
+    <Compile Include="InvestigacaoBR\Services\EventoVivoService.cs" />
     <Compile Include="InvestigacaoBR\Services\GeradorAssassinatoPolicial.cs" />
     <Compile Include="InvestigacaoBR\Services\GeradorBase.cs" />
     <Compile Include="InvestigacaoBR\Services\GeradorCasos.cs" />
@@ -106,8 +113,10 @@
     <Compile Include="InvestigacaoBR\Services\GeradorTraficoArmas.cs" />
     <Compile Include="InvestigacaoBR\Services\LaboratorioService.cs" />
     <Compile Include="InvestigacaoBR\Services\MandadoService.cs" />
+    <Compile Include="InvestigacaoBR\Services\PartnerService.cs" />
     <Compile Include="InvestigacaoBR\Services\PersonaService.cs" />
     <Compile Include="InvestigacaoBR\Services\PoolsCaso.cs" />
+    <Compile Include="InvestigacaoBR\Services\TimelineService.cs" />
     <Compile Include="InvestigacaoBR\UI\MenuDetetive.cs" />
     <Compile Include="InvestigacaoBR\UI\MenuInterrogatorio.cs" />
     <Compile Include="InvestigacaoBR\UI\MenuSelecaoCasos.cs" />

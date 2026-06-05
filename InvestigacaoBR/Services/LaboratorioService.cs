@@ -1,6 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
-using Rage;
 using InvestigacaoBR.Core;
 using InvestigacaoBR.Data;
 
@@ -27,11 +25,11 @@ namespace InvestigacaoBR.Services
             Logger.Info($"Evidencia '{titulo}' enviada ao lab. Laudo em ~{espera / 1000}s.");
             Notificacao.Lab($"\"{titulo}\" recebida. Analise em andamento...");
 
-            GameFiber.StartNew(() =>
+            Rage.GameFiber.StartNew(() =>
             {
                 try
                 {
-                    GameFiber.Sleep(espera);
+                    Rage.GameFiber.Sleep(espera);
                     if (evidencia.ConcluirAnalise())
                     {
                         _casoService.Salvar();
@@ -44,7 +42,7 @@ namespace InvestigacaoBR.Services
             return true;
         }
 
-        public void RetomarAnalisesPendentes(IEnumerable<Caso> casos)
+        public void RetomarAnalisesPendentes(System.Collections.Generic.IEnumerable<Caso> casos)
         {
             if (casos == null) return;
             int concluidas = 0;
@@ -56,13 +54,25 @@ namespace InvestigacaoBR.Services
             if (concluidas > 0) { _casoService.Salvar(); Logger.Info($"Lab: {concluidas} pendente(s) concluida(s) no startup."); }
         }
 
-        private static void NotificarLaudo(Evidencia evidencia)
+        private void NotificarLaudo(Evidencia evidencia)
         {
             string msg = evidencia.PossuiDna
                 ? $"\"{evidencia.Titulo}\": perfil de DNA isolado ({evidencia.PerfilDnaId})."
                 : $"\"{evidencia.Titulo}\": {Resumir(evidencia.ResultadoForense)}";
+
             Notificacao.Lab(msg);
             Logger.Info($"Laudo: '{evidencia.Titulo}' (DNA: {(evidencia.PossuiDna ? evidencia.PerfilDnaId : "n/a")}).");
+
+            // Timeline do caso
+            Guid casoId = TimelineService.EncontrarCasoPorEvidencia(evidencia);
+            if (casoId != System.Guid.Empty)
+            {
+                string entrada = evidencia.PossuiDna
+                    ? $"Laudo '{evidencia.Titulo}': DNA {evidencia.PerfilDnaId} isolado."
+                    : $"Laudo '{evidencia.Titulo}': {Resumir(evidencia.ResultadoForense)}";
+                TimelineService.Registrar(casoId, entrada, "LAB");
+                _casoService.Salvar();
+            }
         }
 
         private static string Resumir(string texto)

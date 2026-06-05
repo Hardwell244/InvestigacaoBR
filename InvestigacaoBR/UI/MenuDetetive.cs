@@ -8,12 +8,6 @@ using System.Collections.Generic;
 
 namespace InvestigacaoBR.UI
 {
-    /// <summary>
-    /// Mesa de trabalho do detetive. fix #8: reestruturado com opcoes globais (sem caso ativo)
-    /// e listas de casos divididas por status (Em Andamento / Historico).
-    /// fix #3: blips de mandado removidos ao encerrar caso.
-    /// fix #9: Notificacao LSPD-style em todas as acoes.
-    /// </summary>
     public class MenuDetetive
     {
         private static readonly RolePed[] RolesOrdem = { RolePed.Indefinido, RolePed.Testemunha, RolePed.PessoaDeInteresse, RolePed.Inocente, RolePed.Culpado };
@@ -21,33 +15,38 @@ namespace InvestigacaoBR.UI
         private static readonly StatusCaso[] StatusOrdem = { StatusCaso.Aberto, StatusCaso.Arquivado, StatusCaso.Resolvido };
         private static readonly string[] StatusNomes = { "Aberto", "Arquivado", "Resolvido" };
 
+        // Servicos
         private readonly CasoService _casoService;
         private readonly CenaService _cenaService;
         private readonly LaboratorioService _laboratorioService;
         private readonly CameraService _cameraService;
         private readonly MandadoService _mandadoService;
         private readonly GeradorCasos _geradorCasos;
+        private readonly DetectiveService _detectiveService;
+        private readonly PartnerService _partnerService;  // <<< CAMPO QUE ESTAVA FALTANDO
 
-        private readonly NativeMenu _menuPrincipal;   // mesa global
-        private readonly NativeMenu _menuAbertos;     // casos em andamento
-        private readonly NativeMenu _menuHistorico;   // casos encerrados
-        private readonly NativeMenu _menuCaso;        // tabs por caso
+        // Menus investigacao
+        private readonly NativeMenu _menuPrincipal;
+        private readonly NativeMenu _menuAbertos;
+        private readonly NativeMenu _menuHistorico;
+        private readonly NativeMenu _menuCaso;
         private readonly NativeMenu _menuCena;
         private readonly NativeMenu _menuEvidencias;
         private readonly NativeMenu _menuDna;
         private readonly NativeMenu _menuCameras;
         private readonly NativeMenu _menuTelefone;
         private readonly NativeMenu _menuStatus;
+        private readonly NativeMenu _menuPerfil;
+        private readonly NativeMenu _menuDiario;
 
         private Caso _casoAtual;
-
-        // G6: rastreia matches de DNA ja notificados para nao repetir
         private readonly HashSet<Guid> _dnaMatchesNotificados = new HashSet<Guid>();
 
         public MenuDetetive(ObjectPool pool,
             CasoService casoService, CenaService cenaService,
             LaboratorioService laboratorioService, CameraService cameraService,
-            MandadoService mandadoService, GeradorCasos geradorCasos)
+            MandadoService mandadoService, GeradorCasos geradorCasos,
+            DetectiveService detectiveService, PartnerService partnerService)
         {
             _casoService = casoService;
             _cenaService = cenaService;
@@ -55,6 +54,8 @@ namespace InvestigacaoBR.UI
             _cameraService = cameraService;
             _mandadoService = mandadoService;
             _geradorCasos = geradorCasos;
+            _detectiveService = detectiveService;
+            _partnerService = partnerService;
 
             _menuPrincipal = new NativeMenu("DETETIVE", "Mesa de Trabalho");
             _menuAbertos = new NativeMenu("DETETIVE", "Em Andamento");
@@ -66,17 +67,14 @@ namespace InvestigacaoBR.UI
             _menuCameras = new NativeMenu("DETETIVE", "Cameras");
             _menuTelefone = new NativeMenu("DETETIVE", "Telefone e Mandados");
             _menuStatus = new NativeMenu("DETETIVE", "Status do Caso");
+            _menuPerfil = new NativeMenu("CARREIRA", "Meu Perfil");
+            _menuDiario = new NativeMenu("DETETIVE", "Diario do Caso");
 
-            pool.Add(_menuPrincipal);
-            pool.Add(_menuAbertos);
-            pool.Add(_menuHistorico);
-            pool.Add(_menuCaso);
-            pool.Add(_menuCena);
-            pool.Add(_menuEvidencias);
-            pool.Add(_menuDna);
-            pool.Add(_menuCameras);
-            pool.Add(_menuTelefone);
-            pool.Add(_menuStatus);
+            foreach (NativeMenu m in new[] {
+                _menuPrincipal, _menuAbertos, _menuHistorico, _menuCaso,
+                _menuCena, _menuEvidencias, _menuDna, _menuCameras, _menuTelefone, _menuStatus,
+                _menuPerfil, _menuDiario })
+                pool.Add(m);
 
             _menuPrincipal.Shown += (s, e) => RebuildPrincipal();
             _menuAbertos.Shown += (s, e) => RebuildAbertos();
@@ -87,6 +85,8 @@ namespace InvestigacaoBR.UI
             _menuCameras.Shown += (s, e) => RebuildCameras();
             _menuTelefone.Shown += (s, e) => RebuildTelefone();
             _menuStatus.Shown += (s, e) => RebuildStatus();
+            _menuPerfil.Shown += (s, e) => RebuildPerfil();
+            _menuDiario.Shown += (s, e) => RebuildDiario();
 
             ConstruirMenuCaso();
         }
@@ -101,16 +101,11 @@ namespace InvestigacaoBR.UI
 
         public void Fechar()
         {
-            _menuPrincipal.Visible = false;
-            _menuAbertos.Visible = false;
-            _menuHistorico.Visible = false;
-            _menuCaso.Visible = false;
-            _menuCena.Visible = false;
-            _menuEvidencias.Visible = false;
-            _menuDna.Visible = false;
-            _menuCameras.Visible = false;
-            _menuTelefone.Visible = false;
-            _menuStatus.Visible = false;
+            foreach (NativeMenu m in new[] {
+                _menuPrincipal, _menuAbertos, _menuHistorico, _menuCaso,
+                _menuCena, _menuEvidencias, _menuDna, _menuCameras, _menuTelefone, _menuStatus,
+                _menuPerfil, _menuDiario })
+                m.Visible = false;
         }
 
         private static void Navegar(NativeMenu de, NativeMenu para)
@@ -125,6 +120,24 @@ namespace InvestigacaoBR.UI
         {
             _menuPrincipal.Clear();
 
+            // Perfil
+            string patente = _detectiveService?.Perfil != null
+                ? DetectiveService.NomePatente(_detectiveService.Perfil.Patente) : "Agente";
+            NativeItem iPerfil = new NativeItem($"Meu Perfil  [{patente}]",
+                "XP, reputacao, integridade e estatisticas da carreira.");
+            iPerfil.Activated += (s, e) => Navegar(_menuPrincipal, _menuPerfil);
+
+            // Parceiro (5B)
+            string[] nomesParceiros = { "Det. Miller (Correto)", "Det. Torres (Neutro)", "Det. Johnson (Corrupto)" };
+            NativeListItem<string> iParceiro = new NativeListItem<string>(
+                $"Parceiro: {(_partnerService?.NomeParceiro ?? "—")}",
+                "Parceiro de investigacao. Personalidade afeta comentarios e propostas.",
+                nomesParceiros);
+            iParceiro.SelectedIndex = _partnerService?.IndiceAtual ?? 0;
+            iParceiro.Activated += (s, e) =>
+                _partnerService?.SelecionarParceiro(iParceiro.SelectedIndex, _detectiveService);
+
+            // Casos
             int qtdAbertos = 0, qtdHistorico = 0;
             foreach (Caso c in _casoService.ObterDoDetetive())
             {
@@ -134,18 +147,18 @@ namespace InvestigacaoBR.UI
 
             NativeItem iAbertos = new NativeItem(
                 $"Investigacoes em Andamento  [{qtdAbertos}]",
-                qtdAbertos > 0 ? "Acessar e gerir casos abertos." : "Nenhum caso aberto. Use F6 para aceitar um.");
+                qtdAbertos > 0 ? "Acessar casos abertos." : "Nenhum caso aberto. Use F6.");
             iAbertos.Enabled = qtdAbertos > 0;
             iAbertos.Activated += (s, e) => Navegar(_menuPrincipal, _menuAbertos);
 
             NativeItem iHistorico = new NativeItem(
                 $"Historico  [{qtdHistorico}]",
-                qtdHistorico > 0 ? "Casos resolvidos e arquivados." : "Nenhum caso encerrado ainda.");
+                qtdHistorico > 0 ? "Casos resolvidos e arquivados." : "Nenhum caso encerrado.");
             iHistorico.Enabled = qtdHistorico > 0;
             iHistorico.Activated += (s, e) => Navegar(_menuPrincipal, _menuHistorico);
 
             NativeItem iGerar = new NativeItem("Gerar Nova Investigacao",
-                "Reabastece o pool com ate 3 casos disponiveis no F6.");
+                "Reabastece o pool com casos disponiveis no F6.");
             iGerar.Activated += (s, e) =>
             {
                 _geradorCasos.GarantirPool();
@@ -156,22 +169,98 @@ namespace InvestigacaoBR.UI
             };
 
             NativeItem iLimpar = new NativeItem("Limpar Cenas Ativas",
-                "Remove todos os visuais das cenas (peds, props, blips). Dados preservados.");
+                "Remove visuais de todas as cenas. Dados preservados.");
             iLimpar.Activated += (s, e) =>
             {
                 int limpas = 0;
                 foreach (Caso caso in _casoService.ObterDoDetetive())
-                {
                     if (_cenaService.CenaMontada(caso.Id)) { _cenaService.LimparCena(caso); limpas++; }
-                }
                 Notificacao.Aviso(limpas > 0 ? $"{limpas} cena(s) limpa(s)." : "Nenhuma cena ativa.");
             };
 
+            _menuPrincipal.Add(iPerfil);
+            _menuPrincipal.Add(iParceiro);
+            _menuPrincipal.Add(new NativeItem("--- Investigacoes ---") { Enabled = false });
             _menuPrincipal.Add(iAbertos);
             _menuPrincipal.Add(iHistorico);
-            _menuPrincipal.Add(new NativeItem("---  Ferramentas Globais  ---") { Enabled = false });
+            _menuPrincipal.Add(new NativeItem("--- Ferramentas ---") { Enabled = false });
             _menuPrincipal.Add(iGerar);
             _menuPrincipal.Add(iLimpar);
+        }
+
+        // ===== PERFIL DO DETETIVE =====
+
+        private void RebuildPerfil()
+        {
+            _menuPerfil.Clear();
+
+            if (_detectiveService?.Perfil == null)
+            {
+                _menuPerfil.Add(new NativeItem("Perfil nao carregado.") { Enabled = false });
+                AdicionarVoltar(_menuPerfil, _menuPrincipal);
+                return;
+            }
+
+            DetectiveProfile p = _detectiveService.Perfil;
+
+            _menuPerfil.Add(new NativeItem(p.Nome,
+                $"Matricula #{p.Matricula}  |  {DetectiveService.NomePatente(p.Patente)}")
+            { Enabled = false });
+
+            _menuPerfil.Add(new NativeItem("Experiencia",
+                p.PatenteMaxima ? $"XP: {p.XP} — patente maxima." : _detectiveService.ResumoXP())
+            { Enabled = false });
+
+            string repCor = p.Reputacao >= 70 ? "~g~" : p.Reputacao >= 40 ? "~y~" : "~r~";
+            _menuPerfil.Add(new NativeItem("Reputacao",
+                $"{repCor}{p.Reputacao}/100~s~  {_detectiveService.BarraReputacao()}")
+            { Enabled = false });
+
+            string intCor = p.Integridade >= 70 ? "~b~" : p.Integridade >= 40 ? "~y~" : "~r~";
+            _menuPerfil.Add(new NativeItem("Integridade",
+                $"{intCor}{p.Integridade}/100~s~  {_detectiveService.BarraIntegridade()}")
+            { Enabled = false });
+
+            if (p.DinheiroPropinas > 0)
+                _menuPerfil.Add(new NativeItem("Propinas Aceitas",
+                    $"~r~${p.DinheiroPropinas}k~w~  |  {p.PropinaRecusadas} recusadas.")
+                { Enabled = false });
+
+            _menuPerfil.Add(new NativeItem("--- Estatisticas ---") { Enabled = false });
+            _menuPerfil.Add(new NativeItem("Casos Resolvidos", p.CasosResolvidos.ToString()) { Enabled = false });
+            _menuPerfil.Add(new NativeItem("Casos Arquivados", p.CasosArquivados.ToString()) { Enabled = false });
+            _menuPerfil.Add(new NativeItem("Prisoes Corretas", p.PrisoesCertas.ToString()) { Enabled = false });
+            _menuPerfil.Add(new NativeItem("Mandados Emitidos", p.MandadosEmitidos.ToString()) { Enabled = false });
+            _menuPerfil.Add(new NativeItem("Evidencias Coletadas", p.EvidenciasColetadas.ToString()) { Enabled = false });
+
+            AdicionarVoltar(_menuPerfil, _menuPrincipal);
+        }
+
+        // ===== DIARIO DO CASO =====
+
+        private void RebuildDiario()
+        {
+            _menuDiario.Clear();
+            if (_casoAtual == null || _casoAtual.Timeline == null || _casoAtual.Timeline.Count == 0)
+            {
+                _menuDiario.Add(new NativeItem("Nenhum registro ainda.", "Acoes na cena aparecerao aqui.") { Enabled = false });
+                VoltarCaso(_menuDiario);
+                return;
+            }
+
+            List<TimelineEntry> tl = _casoAtual.Timeline;
+            int inicio = Math.Max(0, tl.Count - 20);
+            for (int i = tl.Count - 1; i >= inicio; i--)
+            {
+                TimelineEntry e = tl[i];
+                _menuDiario.Add(new NativeItem(
+                    $"[{e.Autor,-8}] {e.DataHora:HH:mm}", e.Texto)
+                { Enabled = false });
+            }
+            if (tl.Count > 20)
+                _menuDiario.Add(new NativeItem($"... e mais {tl.Count - 20} registros anteriores.") { Enabled = false });
+
+            VoltarCaso(_menuDiario);
         }
 
         // ===== LISTAS DE CASOS =====
@@ -231,11 +320,12 @@ namespace InvestigacaoBR.UI
         private void ConstruirMenuCaso()
         {
             NativeItem iCena = new NativeItem("Jurisdicao e Cena", "Assumir, isolar e processar a cena.");
-            NativeItem iEvid = new NativeItem("Evidencias e Lab", "Coletar evidencias e enviar ao laboratorio.");
+            NativeItem iEvid = new NativeItem("Evidencias e Lab", "Coletar e enviar ao laboratorio.");
             NativeItem iDna = new NativeItem("DNA e Suspeitos", "Cruzar DNA e classificar os peds.");
             NativeItem iCam = new NativeItem("Cameras", "Revisar gravacoes da area.");
-            NativeItem iTel = new NativeItem("Telefone e Mandados", "Emitir mandados e rastrear suspeitos.");
+            NativeItem iTel = new NativeItem("Telefone e Mandados", "Emitir mandados e rastrear.");
             NativeItem iStatus = new NativeItem("Status do Caso", "Atualizar o status da investigacao.");
+            NativeItem iDiario = new NativeItem("Diario da Investigacao", "Historico cronologico de todas as acoes.");
 
             iCena.Activated += (s, e) => Navegar(_menuCaso, _menuCena);
             iEvid.Activated += (s, e) => Navegar(_menuCaso, _menuEvidencias);
@@ -243,8 +333,8 @@ namespace InvestigacaoBR.UI
             iCam.Activated += (s, e) => Navegar(_menuCaso, _menuCameras);
             iTel.Activated += (s, e) => Navegar(_menuCaso, _menuTelefone);
             iStatus.Activated += (s, e) => Navegar(_menuCaso, _menuStatus);
+            iDiario.Activated += (s, e) => Navegar(_menuCaso, _menuDiario);
 
-            // Volta para a lista correta baseado no status atual do caso
             NativeItem voltar = new NativeItem("< Voltar");
             voltar.Activated += (s, e) =>
             {
@@ -260,6 +350,7 @@ namespace InvestigacaoBR.UI
             _menuCaso.Add(iCam);
             _menuCaso.Add(iTel);
             _menuCaso.Add(iStatus);
+            _menuCaso.Add(iDiario);
             _menuCaso.Add(voltar);
         }
 
@@ -276,13 +367,18 @@ namespace InvestigacaoBR.UI
             { Enabled = !caso.JurisdicaoAssumida };
             iJur.Activated += (s, e) =>
             {
-                if (caso.AssumirJurisdicao()) { _casoService.Salvar(); Notificacao.Info("Jurisdicao assumida."); }
+                if (caso.AssumirJurisdicao())
+                {
+                    _casoService.Salvar();
+                    TimelineService.Registrar(caso.Id, "Detetive assumiu a jurisdicao da cena.", "DETETIVE");
+                    Notificacao.Info("Jurisdicao assumida.");
+                }
                 RebuildCena();
             };
 
             NativeItem iIsol = new NativeItem("Isolar area",
                 !caso.JurisdicaoAssumida ? "Assuma a jurisdicao primeiro." :
-                caso.CenaIsolada ? "Ja isolada." : "Cerca a cena com fita de isolamento.")
+                caso.CenaIsolada ? "Ja isolada." : "Cerca a cena com fita.")
             { Enabled = caso.JurisdicaoAssumida && !caso.CenaIsolada };
             iIsol.Activated += (s, e) =>
             {
@@ -290,6 +386,7 @@ namespace InvestigacaoBR.UI
                 {
                     _cenaService.SpawnarFitaIsolamento(caso);
                     _casoService.Salvar();
+                    TimelineService.Registrar(caso.Id, "Area isolada com fita de perimetro.", "DETETIVE");
                     Notificacao.Info("Area isolada.");
                 }
                 RebuildCena();
@@ -301,7 +398,12 @@ namespace InvestigacaoBR.UI
             { Enabled = caso.CenaIsolada && !caso.CenaProcessada };
             iProc.Activated += (s, e) =>
             {
-                if (caso.ProcessarCena()) { _casoService.Salvar(); Notificacao.Sucesso("Cena processada. Colete as evidencias."); }
+                if (caso.ProcessarCena())
+                {
+                    _casoService.Salvar();
+                    TimelineService.Registrar(caso.Id, "Cena processada. Coleta liberada.", "DETETIVE");
+                    Notificacao.Sucesso("Cena processada. Colete as evidencias.");
+                }
                 RebuildCena();
             };
 
@@ -339,11 +441,11 @@ namespace InvestigacaoBR.UI
                             if (evidencia.Coletar(TempoJogo.Agora()))
                             {
                                 if (evidencia.PropVivo != null && evidencia.PropVivo.Exists())
-                                {
-                                    try { evidencia.PropVivo.Delete(); } catch { }
-                                    evidencia.PropVivo = null;
-                                }
+                                { try { evidencia.PropVivo.Delete(); } catch { } evidencia.PropVivo = null; }
                                 _casoService.Salvar();
+                                TimelineService.Registrar(caso.Id, $"Evidencia coletada: '{evidencia.Titulo}'.", "DETETIVE");
+                                _detectiveService?.RegistrarEvidenciaColetada();
+                                _partnerService?.ComentarEvidenciaEncontrada(caso.Id);
                                 Notificacao.Sucesso($"Coletado: {evidencia.Titulo}");
                             }
                             RebuildEvidencias();
@@ -353,7 +455,11 @@ namespace InvestigacaoBR.UI
                     case EstadoEvidencia.Coletada:
                         item.Activated += (s, e) =>
                         {
-                            if (_laboratorioService.EnviarParaAnalise(evidencia)) RebuildEvidencias();
+                            if (_laboratorioService.EnviarParaAnalise(evidencia))
+                            {
+                                TimelineService.Registrar(caso.Id, $"'{evidencia.Titulo}' enviada ao laboratorio.", "DETETIVE");
+                                RebuildEvidencias();
+                            }
                         };
                         break;
 
@@ -362,10 +468,8 @@ namespace InvestigacaoBR.UI
                         item.Enabled = false;
                         break;
                 }
-
                 _menuEvidencias.Add(item);
             }
-
             VoltarCaso(_menuEvidencias);
         }
 
@@ -396,12 +500,12 @@ namespace InvestigacaoBR.UI
                 {
                     p.AlterarRole(RolesOrdem[item.SelectedIndex]);
                     _casoService.Salvar();
+                    TimelineService.Registrar(caso.Id, $"{p.Nome} classificado como {RolesNomes[item.SelectedIndex]}.", "DETETIVE");
                     item.Description = DescricaoPed(caso, p);
                     Notificacao.Info($"{p.Nome}: {RolesNomes[item.SelectedIndex]}");
                 };
                 _menuDna.Add(item);
             }
-
             VoltarCaso(_menuDna);
         }
 
@@ -410,13 +514,11 @@ namespace InvestigacaoBR.UI
             string ident = ped.DataNascimento == DateTime.MinValue
                 ? "Nao identificado."
                 : $"{ped.DataNascimento:dd/MM/yyyy} | {ped.Genero}{(ped.Procurado ? " | PROCURADO" : "")}.";
-
             string dna = "";
             if (ped.PossuiDna)
                 foreach (Evidencia ev in caso.Evidencias)
                     if (ev.Estado == EstadoEvidencia.Analisada && ev.PossuiDna && ev.PerfilDnaId == ped.PerfilDnaId)
-                    { dna = "  [DNA CONFIRMADO em evidencia!]"; break; }
-
+                    { dna = "  [DNA CONFIRMADO]"; break; }
             return $"{RolesNomes[IndiceRole(ped.Role)]}. {ident}{dna}  (Enter = aplicar papel)";
         }
 
@@ -430,31 +532,29 @@ namespace InvestigacaoBR.UI
         {
             _menuCameras.Clear();
             if (_casoAtual == null) { VoltarCaso(_menuCameras); return; }
-
             if (_casoAtual.Cameras.Count == 0)
             {
                 _menuCameras.Add(new NativeItem("Nenhuma camera registrada nesta area.") { Enabled = false });
                 VoltarCaso(_menuCameras);
                 return;
             }
-
             foreach (GravacaoCamera cam in _casoAtual.Cameras)
             {
                 GravacaoCamera g = cam;
-                string desc = g.Revisada
-                    ? $"Revisada. Conteudo: {g.InfoRevelada}"
-                    : "Selecione para acessar o conteudo da gravacao.";
-                NativeItem item = new NativeItem(g.Local, desc);
+                NativeItem item = new NativeItem(g.Local,
+                    g.Revisada ? $"Revisada: {g.InfoRevelada}" : "Selecione para acessar o conteudo.");
                 item.Activated += (s, e) =>
                 {
-                    // fix #12B: sem render ao vivo — entrega a informacao da filmagem direto.
-                    if (!g.Revisada) { g.MarcarRevisada(); _casoService.Salvar(); }
+                    if (!g.Revisada)
+                    {
+                        g.MarcarRevisada(); _casoService.Salvar();
+                        TimelineService.Registrar(_casoAtual.Id, $"Camera '{g.Local}': {g.InfoRevelada}", "DETETIVE");
+                    }
                     Notificacao.Camera($"{g.Local}: {g.InfoRevelada}");
                     RebuildCameras();
                 };
                 _menuCameras.Add(item);
             }
-
             VoltarCaso(_menuCameras);
         }
 
@@ -462,18 +562,22 @@ namespace InvestigacaoBR.UI
         {
             _menuTelefone.Clear();
             if (_casoAtual == null) { VoltarCaso(_menuTelefone); return; }
-
             foreach (PedDoCaso ped in _casoAtual.Peds)
             {
                 PedDoCaso p = ped;
-                string desc = p.MandadoEmitido
-                    ? $"Mandado emitido. Tel: {p.RegistroTelefonico}"
-                    : "Selecione para EMITIR MANDADO (revela telefone + rastreio no mapa).";
-                NativeItem item = new NativeItem(p.Nome, desc);
-                item.Activated += (s, e) => { _mandadoService.Emitir(p); RebuildTelefone(); };
+                NativeItem item = new NativeItem(p.Nome,
+                    p.MandadoEmitido ? $"Mandado emitido. Tel: {p.RegistroTelefonico}" : "Selecione para EMITIR MANDADO.");
+                item.Activated += (s, e) =>
+                {
+                    if (_mandadoService.Emitir(p))
+                    {
+                        TimelineService.Registrar(_casoAtual.Id, $"Mandado emitido para {p.Nome}.", "MANDADO");
+                        _detectiveService?.RegistrarMandadoEmitido();
+                    }
+                    RebuildTelefone();
+                };
                 _menuTelefone.Add(item);
             }
-
             VoltarCaso(_menuTelefone);
         }
 
@@ -494,16 +598,45 @@ namespace InvestigacaoBR.UI
                     if (novo == StatusCaso.Resolvido || novo == StatusCaso.Arquivado)
                     {
                         _cenaService.RemoverCenaCompleta(caso);
-                        // fix #3: remove blips de mandado de todos os peds do caso
                         foreach (PedDoCaso p in caso.Peds) _mandadoService.RemoverRastreamento(p.Id);
+
+                        if (novo == StatusCaso.Resolvido)
+                        {
+                            int xp = _detectiveService?.RegistrarResolucao(caso) ?? 0;
+                            TimelineService.Registrar(caso.Id, $"Caso RESOLVIDO.{(xp > 0 ? $" +{xp} XP." : "")}", "SISTEMA");
+                            _partnerService?.ComentarResolucao(caso);
+                        }
+                        else
+                        {
+                            _detectiveService?.RegistrarArquivamento();
+                            TimelineService.Registrar(caso.Id, "Caso arquivado. -5 reputacao.", "SISTEMA");
+                        }
+                        _casoService.Salvar();
                     }
-                    Notificacao.Info($"Caso {StatusTexto(novo)}.");
+                    Notificacao.Info($"Caso {StatusTexto(caso.Status)}.");
                 }
                 item.Description = $"Atual: {StatusTexto(caso.Status)}";
             };
 
             _menuStatus.Add(item);
             VoltarCaso(_menuStatus);
+        }
+
+        private void VerificarMatchesDNA()
+        {
+            if (_casoAtual == null) return;
+            foreach (PedDoCaso ped in _casoAtual.Peds)
+            {
+                if (!ped.PossuiDna || _dnaMatchesNotificados.Contains(ped.Id)) continue;
+                foreach (Evidencia ev in _casoAtual.Evidencias)
+                {
+                    if (ev.Estado != EstadoEvidencia.Analisada || !ev.PossuiDna || ev.PerfilDnaId != ped.PerfilDnaId) continue;
+                    Notificacao.Lab($"DNA de ~b~{ped.Nome}~w~ bate com '{ev.Titulo}'! Classifique como ~r~Culpado~w~.");
+                    TimelineService.Registrar(_casoAtual.Id, $"DNA de {ped.Nome} confirmado em '{ev.Titulo}'.", "LAB");
+                    _dnaMatchesNotificados.Add(ped.Id);
+                    break;
+                }
+            }
         }
 
         private void VoltarCaso(NativeMenu secao)
@@ -513,51 +646,21 @@ namespace InvestigacaoBR.UI
             secao.Add(v);
         }
 
-        // ===== HELPERS =====
-
-        /// <summary>
-        /// G6: Notifica UMA vez por match de DNA (ped + evidencia) — nao repete se o jogador
-        /// fechar e reabrir a aba. Orienta o jogador a classificar o ped como Culpado.
-        /// </summary>
-        private void VerificarMatchesDNA()
+        private static int IndiceStatus(StatusCaso s)
         {
-            if (_casoAtual == null) return;
-
-            foreach (PedDoCaso ped in _casoAtual.Peds)
-            {
-                if (!ped.PossuiDna || _dnaMatchesNotificados.Contains(ped.Id)) continue;
-
-                foreach (Evidencia ev in _casoAtual.Evidencias)
-                {
-                    if (ev.Estado != EstadoEvidencia.Analisada || !ev.PossuiDna) continue;
-                    if (ev.PerfilDnaId != ped.PerfilDnaId) continue;
-
-                    Notificacao.Lab(
-                        $"DNA de ~b~{ped.Nome}~w~ bate com '{ev.Titulo}'! " +
-                        $"Considere classifica-lo como ~r~Culpado~w~.");
-                    _dnaMatchesNotificados.Add(ped.Id);
-                    Logger.Info($"DNA match notificado: ped '{ped.Nome}' + evidencia '{ev.Titulo}'.");
-                    break;
-                }
-            }
-        }
-
-
-        private static int IndiceStatus(StatusCaso status)
-        {
-            for (int i = 0; i < StatusOrdem.Length; i++) if (StatusOrdem[i] == status) return i;
+            for (int i = 0; i < StatusOrdem.Length; i++) if (StatusOrdem[i] == s) return i;
             return 0;
         }
 
-        private static string StatusTexto(StatusCaso status)
+        private static string StatusTexto(StatusCaso s)
         {
-            switch (status)
+            switch (s)
             {
                 case StatusCaso.Disponivel: return "Disponivel";
                 case StatusCaso.Aberto: return "Aberto";
                 case StatusCaso.Arquivado: return "Arquivado";
                 case StatusCaso.Resolvido: return "Resolvido";
-                default: return status.ToString();
+                default: return s.ToString();
             }
         }
     }
