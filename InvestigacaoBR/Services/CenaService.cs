@@ -14,6 +14,7 @@ namespace InvestigacaoBR.Services
         private class CenaAtiva
         {
             public Blip Blip;
+            public Vector3 Origem;
             public readonly List<Rage.Object> PropsCenario = new List<Rage.Object>();
         }
 
@@ -24,23 +25,18 @@ namespace InvestigacaoBR.Services
             _personaService = personaService ?? new PersonaService();
         }
 
-        private static Vector3 OrigemCena(Caso caso)
-            => new Vector3(caso.CenaX, caso.CenaY, caso.CenaZ);
+        private static Vector3 OrigemCena(Caso caso) => new Vector3(caso.CenaX, caso.CenaY, caso.CenaZ);
 
         // ===== SPAWN =====
 
         public void SpawnarCena(Caso caso)
         {
             if (caso == null) { Logger.Warn("SpawnarCena: caso nulo."); return; }
-            if (_cenas.ContainsKey(caso.Id))
-            {
-                Logger.Info($"SpawnarCena ignorado: cena '{caso.Titulo}' ja montada.");
-                return;
-            }
+            if (_cenas.ContainsKey(caso.Id)) { Logger.Info($"SpawnarCena ignorado: cena '{caso.Titulo}' ja montada."); return; }
 
             Logger.Info($"Montando cena do caso '{caso.Titulo}'...");
             Vector3 origem = OrigemCena(caso);
-            CenaAtiva cena = new CenaAtiva();
+            CenaAtiva cena = new CenaAtiva { Origem = origem };
 
             try
             {
@@ -59,6 +55,9 @@ namespace InvestigacaoBR.Services
         private void SpawnarPed(PedDoCaso pedDoCaso, Vector3 origem)
         {
             if (pedDoCaso == null || string.IsNullOrEmpty(pedDoCaso.ModeloPed)) return;
+
+            if (pedDoCaso.NaoSpawnarNaCena) return; // culpado ausente da cena (fugiu)
+
             try
             {
                 Vector3 pos = origem + new Vector3(pedDoCaso.OffsetX, pedDoCaso.OffsetY, pedDoCaso.OffsetZ);
@@ -79,15 +78,40 @@ namespace InvestigacaoBR.Services
                 if (pedDoCaso.SpawnarMorto)
                 {
                     ped.Kill();
-                    SpawnarDecalSangue(pos); // fix #6: poca de sangue no chao
+                    SpawnarDecalSangue(pos);
                     Logger.Info($"Ped '{pedDoCaso.Nome}' spawnado MORTO na cena.");
                 }
                 else
                 {
-                    Logger.Info($"Ped '{pedDoCaso.Nome}' spawnado na cena.");
+                    // G1: comportamento baseado no papel do ped
+                    AtribuirComportamento(ped, pedDoCaso);
+                    Logger.Info($"Ped '{pedDoCaso.Nome}' spawnado na cena [{pedDoCaso.Role}].");
                 }
             }
             catch (Exception ex) { Logger.Exception(ex, $"SpawnarPed '{pedDoCaso.Nome}'"); }
+        }
+
+        private static void AtribuirComportamento(Ped ped, PedDoCaso pedDoCaso)
+        {
+            try
+            {
+                if (pedDoCaso.EhCulpadoReal)
+                {
+                    // Suspeito: anda nervosamente, mas sem fugir ainda (fuga so quando jogador chega perto)
+                    ped.Tasks.Wander();
+                }
+                else if (pedDoCaso.Role == RolePed.Testemunha)
+                {
+                    // Testemunha: para no lugar, nervosa
+                    ped.Tasks.StandStill(int.MaxValue);
+                }
+                else
+                {
+                    // Civil / indefinido: anda normalmente
+                    ped.Tasks.Wander();
+                }
+            }
+            catch (Exception ex) { Logger.Exception(ex, $"AtribuirComportamento '{pedDoCaso.Nome}'"); }
         }
 
         private void SpawnarEvidencia(Evidencia ev, Vector3 origem)
@@ -105,11 +129,8 @@ namespace InvestigacaoBR.Services
                 }
 
                 prop.IsPersistent = true;
-
-                // fix #4: rotacao aleatoria no plano, assenta no chao, congela para nao flutuar
                 prop.Rotation = new Rotator(0f, 0f, Aleatorio.Real(0f, 360f));
-                NativeFunction.Natives.PLACE_OBJECT_ON_GROUND_PROPERLY(prop);
-                prop.IsPositionFrozen = true;
+                AssentarNoChaoAsync(prop, pos.Z);
 
                 ev.PropVivo = prop;
                 Logger.Info($"Prop '{ev.Titulo}' spawnado.");
@@ -140,8 +161,7 @@ namespace InvestigacaoBR.Services
                     if (barreira != null && barreira.Exists())
                     {
                         barreira.IsPersistent = true;
-                        NativeFunction.Natives.PLACE_OBJECT_ON_GROUND_PROPERLY(barreira);
-                        barreira.IsPositionFrozen = true;
+                        AssentarNoChaoAsync(barreira, pos.Z);
                         cena.PropsCenario.Add(barreira);
                     }
                 }
@@ -152,21 +172,25 @@ namespace InvestigacaoBR.Services
 
         // ===== LIMPEZA =====
 
-        /// <summary>
-        /// Remove TODOS os visuais: peds, props, fita E o blip da cena.
-        /// Chamado pela tecla END. Os dados do caso continuam vivos no CasoService.
-        /// fix #2: blip do caso agora some junto com o resto.
-        /// </summary>
         public void LimparCena(Caso caso)
         {
             if (caso == null) return;
             Logger.Info($"Limpando visuais de '{caso.Titulo}'...");
 
-            foreach (PedDoCaso ped in caso.Peds)
+            foreach (PedDoCaso pedDoCaso in caso.Peds)
             {
-                if (ped.EstaSpawnado)
-                    try { ped.PedVivo.Delete(); } catch (Exception ex) { Logger.Exception(ex, "LimparCena/ped"); }
-                ped.PedVivo = null;
+                if (pedDoCaso.EstaSpawnado)
+                {
+                    try
+                    {
+                        // Libera como ambient — continuam no mundo
+                        pedDoCaso.PedVivo.IsPersistent = false;
+                        if (!pedDoCaso.SpawnarMorto)
+                            pedDoCaso.PedVivo.BlockPermanentEvents = false;
+                    }
+                    catch (Exception ex) { Logger.Exception(ex, "LimparCena/ped"); }
+                }
+                pedDoCaso.PedVivo = null;
             }
 
             foreach (Evidencia ev in caso.Evidencias)
@@ -190,10 +214,9 @@ namespace InvestigacaoBR.Services
                 }
             }
 
-            Logger.Info($"Visuais de '{caso.Titulo}' removidos. Dados preservados.");
+            Logger.Info($"Visuais de '{caso.Titulo}' removidos. Peds liberados como ambient.");
         }
 
-        /// <summary>Remove cena + dados internos. Blip já é apagado pelo LimparCena.</summary>
         public void RemoverCenaCompleta(Caso caso)
         {
             if (caso == null) return;
@@ -204,21 +227,58 @@ namespace InvestigacaoBR.Services
 
         public bool CenaMontada(Guid casoId) => _cenas.ContainsKey(casoId);
 
+        public void ProcessarBlipsProximidade(Vector3 posJogador, float raio = 10f)
+        {
+            foreach (var kvp in _cenas)
+            {
+                CenaAtiva cena = kvp.Value;
+                if (cena.Blip == null || !cena.Blip.Exists()) continue;
+                if (Vector3.Distance(posJogador, cena.Origem) <= raio)
+                {
+                    try { cena.Blip.IsRouteEnabled = false; cena.Blip.Delete(); } catch { }
+                    cena.Blip = null;
+                }
+            }
+        }
+
         // ===== HELPERS =====
 
-        /// <summary>
-        /// fix #6: decal de poca de sangue no chao.
-        /// Tipo 8 = blood pool. Se nao aparecer, tente 1 ou 9.
-        /// </summary>
+        private static void AssentarNoChaoAsync(Rage.Object prop, float zOriginal)
+        {
+            GameFiber.StartNew(() =>
+            {
+                try
+                {
+                    int[] intervalos = { 60, 60, 120, 300, 600 };
+                    foreach (int espera in intervalos)
+                    {
+                        for (int i = 0; i < espera; i++)
+                        {
+                            GameFiber.Yield();
+                            if (prop == null || !prop.Exists()) return;
+                        }
+                        NativeFunction.Natives.PLACE_OBJECT_ON_GROUND_PROPERLY(prop);
+                        GameFiber.Yield();
+                        if (prop == null || !prop.Exists()) return;
+                        if (Math.Abs(prop.Position.Z - zOriginal) > 0.1f)
+                        {
+                            prop.IsPositionFrozen = true;
+                            return;
+                        }
+                    }
+                    if (prop != null && prop.Exists()) prop.IsPositionFrozen = true;
+                }
+                catch (Exception ex) { Logger.Exception(ex, "AssentarNoChaoAsync"); }
+            }, "InvestigacaoBR.AssentarProp");
+        }
+
         private static void SpawnarDecalSangue(Vector3 pos)
         {
             try
             {
                 NativeFunction.Natives.ADD_DECAL<int>(
-                    8,
-                    pos.X, pos.Y, pos.Z,
-                    0f, 1f, 0f,
-                    0f, 0f, 1f,
+                    14, pos.X, pos.Y, pos.Z,
+                    0f, 1f, 0f, 0f, 0f, 1f,
                     1.5f, 1.5f,
                     0.8f, 0f, 0f, 1f,
                     false, false);

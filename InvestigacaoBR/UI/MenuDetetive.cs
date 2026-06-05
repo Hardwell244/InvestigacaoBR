@@ -1,9 +1,10 @@
-﻿using System;
-using LemonUI;
-using LemonUI.Menus;
-using InvestigacaoBR.Core;
+﻿using InvestigacaoBR.Core;
 using InvestigacaoBR.Data;
 using InvestigacaoBR.Services;
+using LemonUI;
+using LemonUI.Menus;
+using System;
+using System.Collections.Generic;
 
 namespace InvestigacaoBR.UI
 {
@@ -39,6 +40,9 @@ namespace InvestigacaoBR.UI
         private readonly NativeMenu _menuStatus;
 
         private Caso _casoAtual;
+
+        // G6: rastreia matches de DNA ja notificados para nao repetir
+        private readonly HashSet<Guid> _dnaMatchesNotificados = new HashSet<Guid>();
 
         public MenuDetetive(ObjectPool pool,
             CasoService casoService, CenaService cenaService,
@@ -79,7 +83,7 @@ namespace InvestigacaoBR.UI
             _menuHistorico.Shown += (s, e) => RebuildHistorico();
             _menuCena.Shown += (s, e) => RebuildCena();
             _menuEvidencias.Shown += (s, e) => RebuildEvidencias();
-            _menuDna.Shown += (s, e) => RebuildDna();
+            _menuDna.Shown += (s, e) => { RebuildDna(); VerificarMatchesDNA(); };
             _menuCameras.Shown += (s, e) => RebuildCameras();
             _menuTelefone.Shown += (s, e) => RebuildTelefone();
             _menuStatus.Shown += (s, e) => RebuildStatus();
@@ -510,6 +514,34 @@ namespace InvestigacaoBR.UI
         }
 
         // ===== HELPERS =====
+
+        /// <summary>
+        /// G6: Notifica UMA vez por match de DNA (ped + evidencia) — nao repete se o jogador
+        /// fechar e reabrir a aba. Orienta o jogador a classificar o ped como Culpado.
+        /// </summary>
+        private void VerificarMatchesDNA()
+        {
+            if (_casoAtual == null) return;
+
+            foreach (PedDoCaso ped in _casoAtual.Peds)
+            {
+                if (!ped.PossuiDna || _dnaMatchesNotificados.Contains(ped.Id)) continue;
+
+                foreach (Evidencia ev in _casoAtual.Evidencias)
+                {
+                    if (ev.Estado != EstadoEvidencia.Analisada || !ev.PossuiDna) continue;
+                    if (ev.PerfilDnaId != ped.PerfilDnaId) continue;
+
+                    Notificacao.Lab(
+                        $"DNA de ~b~{ped.Nome}~w~ bate com '{ev.Titulo}'! " +
+                        $"Considere classifica-lo como ~r~Culpado~w~.");
+                    _dnaMatchesNotificados.Add(ped.Id);
+                    Logger.Info($"DNA match notificado: ped '{ped.Nome}' + evidencia '{ev.Titulo}'.");
+                    break;
+                }
+            }
+        }
+
 
         private static int IndiceStatus(StatusCaso status)
         {

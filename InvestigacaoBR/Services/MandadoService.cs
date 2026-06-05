@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using Rage;
+using Rage.Native;
 using InvestigacaoBR.Core;
 using InvestigacaoBR.Data;
 
@@ -9,7 +10,12 @@ namespace InvestigacaoBR.Services
     public class MandadoService
     {
         private readonly CasoService _casoService;
+
+        // Blips de rastreamento dos suspeitos
         private readonly Dictionary<Guid, Blip> _blipsRastreamento = new Dictionary<Guid, Blip>();
+
+        // G3+G8: peds associados spawnados na segunda locacao do mandado
+        private readonly Dictionary<Guid, List<Ped>> _associados = new Dictionary<Guid, List<Ped>>();
 
         public MandadoService(CasoService casoService) { _casoService = casoService; }
 
@@ -31,6 +37,10 @@ namespace InvestigacaoBR.Services
 
             Notificacao.Mandado($"{ped.Nome}: {tel}");
             CriarBlipRastreamento(ped);
+
+            // G3+G8: se ha uma localizacao conhecida, spawna associados la
+            SpawnarAssociadosAsync(ped);
+
             return true;
         }
 
@@ -55,12 +65,77 @@ namespace InvestigacaoBR.Services
             catch (Exception ex) { Logger.Exception(ex, $"CriarBlipRastreamento '{ped.Nome}'"); }
         }
 
+        /// <summary>
+        /// G3+G8: Spawna 1-3 associados do suspeito na sua localizacao conhecida.
+        /// Sao peds de gangue que o jogador pode encontrar e abordar/prender ao chegar la.
+        /// Espera 5s antes de spawnar para dar tempo ao motor de carregar a geometria da area.
+        /// </summary>
+        private void SpawnarAssociadosAsync(PedDoCaso ped)
+        {
+            bool temLocal = !(ped.LocalConhecidoX == 0f && ped.LocalConhecidoY == 0f && ped.LocalConhecidoZ == 0f);
+            if (!temLocal) return;
+            if (_associados.ContainsKey(ped.Id)) return;
+
+            Guid pedId = ped.Id;
+            string nome = ped.Nome;
+            Vector3 local = new Vector3(ped.LocalConhecidoX, ped.LocalConhecidoY, ped.LocalConhecidoZ);
+
+            GameFiber.StartNew(() =>
+            {
+                try
+                {
+                    // Aguarda para garantir que o mod registrou o spawn antes de tentar
+                    for (int i = 0; i < 300; i++) GameFiber.Yield();
+
+                    List<Ped> spawned = new List<Ped>();
+                    int qtd = Aleatorio.Inteiro(1, 3);
+                    Logger.Info($"Spawnando {qtd} associado(s) de '{nome}' em {local}.");
+
+                    for (int i = 0; i < qtd; i++)
+                    {
+                        double ang = (Math.PI * 2.0 / Math.Max(1, qtd)) * i + Aleatorio.Real(-0.3f, 0.3f);
+                        float raio = Aleatorio.Real(2f, 5f);
+                        Vector3 pos = local + new Vector3((float)(Math.Cos(ang) * raio), (float)(Math.Sin(ang) * raio), 0f);
+
+                        string modelo = Aleatorio.Item(PoolsCaso.ModelosSuspeito);
+                        Ped assoc = new Ped(new Model(modelo), pos, Aleatorio.Real(0f, 360f));
+                        GameFiber.Yield();
+
+                        if (assoc == null || !assoc.Exists()) continue;
+
+                        assoc.IsPersistent = true;
+                        // Deixa eventos ativos: se o jogador se aproximar, reagem naturalmente
+                        assoc.BlockPermanentEvents = false;
+                        assoc.Tasks.Wander();
+                        spawned.Add(assoc);
+                        Logger.Info($"Associado '{modelo}' spawnado.");
+                    }
+
+                    if (spawned.Count > 0)
+                    {
+                        _associados[pedId] = spawned;
+                        Notificacao.Mandado($"Associados de {nome} localizados. Dirija-se ao ponto roxo.");
+                    }
+                }
+                catch (Exception ex) { Logger.Exception(ex, $"SpawnarAssociadosAsync '{nome}'"); }
+            }, "InvestigacaoBR.Associados");
+        }
+
         public void RemoverRastreamento(Guid pedId)
         {
             if (_blipsRastreamento.TryGetValue(pedId, out Blip blip))
             {
                 if (blip != null) try { blip.Delete(); } catch { }
                 _blipsRastreamento.Remove(pedId);
+            }
+
+            // G3+G8: libera associados como ambient ao encerrar rastreamento
+            if (_associados.TryGetValue(pedId, out List<Ped> assocs))
+            {
+                foreach (Ped a in assocs)
+                    if (a != null && a.Exists())
+                        try { a.IsPersistent = false; } catch { }
+                _associados.Remove(pedId);
             }
         }
 
@@ -69,6 +144,12 @@ namespace InvestigacaoBR.Services
             foreach (Blip blip in _blipsRastreamento.Values)
                 if (blip != null) try { blip.Delete(); } catch { }
             _blipsRastreamento.Clear();
+
+            foreach (List<Ped> assocs in _associados.Values)
+                foreach (Ped a in assocs)
+                    if (a != null && a.Exists())
+                        try { a.IsPersistent = false; } catch { }
+            _associados.Clear();
         }
 
         public void RestaurarRastreamentos(IEnumerable<Caso> casos)

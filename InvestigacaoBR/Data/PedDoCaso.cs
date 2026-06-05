@@ -77,6 +77,13 @@ namespace InvestigacaoBR.Data
         /// <summary>Se true, o Ped e spawnado morto (ex.: a vitima na cena).</summary>
         public bool SpawnarMorto { get; set; }
 
+        /// <summary>
+        /// Quando true, este ped e registrado no caso mas NAO spawnado fisicamente na cena.
+        /// Usado para culpados que ja fugiram (sequestro, latrocinio) — existem via mandado.
+        /// </summary>
+        [XmlIgnore]
+        public bool NaoSpawnarNaCena { get; set; } = false;
+
         // ----- Telefone / mandado (autorado) -----
         /// <summary>Registro telefonico autorado. Revelado apos o mandado.</summary>
         public string RegistroTelefonico { get; set; }
